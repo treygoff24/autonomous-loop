@@ -18,6 +18,17 @@ from .paths import RuntimePaths, hash_text
 from .storage import RuntimeStore, read_json
 
 
+def _check_hooks_match(hooks_json: Any, machine_config: dict[str, Any]) -> tuple[bool, str | None]:
+    """Return (True, None) if hooks stop command matches machine config, else (False, reason)."""
+    try:
+        stop_command = hooks_json["hooks"]["Stop"][0]["hooks"][0]["command"] if hooks_json else None
+    except (KeyError, IndexError, TypeError):
+        stop_command = None
+    if stop_command != machine_config["hook_commands"]["stop"]:
+        return False, "stop command does not match machine config"
+    return True, None
+
+
 def _default_limits(project_config: dict[str, Any]) -> dict[str, int]:
     defaults = project_config.get("defaults", {})
     return {
@@ -670,8 +681,9 @@ class AutonomousLoopRuntime:
         hook_commands = machine_config["hook_commands"]
 
         written: list[str] = []
-        hooks_path = self.store.write_global_hooks(hook_commands)
-        written.append(hooks_path)
+        hooks_path = self.store.write_global_hooks(hook_commands, force=force)
+        if hooks_path is not None:
+            written.append(hooks_path)
 
         skill_path = self.store.install_global_skill(self.template_root, force=force)
         if skill_path is not None:
@@ -686,7 +698,7 @@ class AutonomousLoopRuntime:
             "command_path": machine_config["command_path"],
             "hook_commands": machine_config["hook_commands"],
             "machine_config_path": machine_path,
-            "global_hooks_path": hooks_path,
+            "global_hooks_path": hooks_path or str(self.paths.codex_home_hooks_path()),
             "global_skill_path": skill_path or str(self.paths.global_skill_path()),
             "written": written,
         }
@@ -709,7 +721,8 @@ class AutonomousLoopRuntime:
                 "path": str(self.paths.machine_config_path()),
             }
         else:
-            assert machine is not None
+            if machine is None:
+                return {"ok": False, "error_code": "internal_error", "message": "machine config unexpectedly None after validation"}
             command_file = Path(machine["command_path"])
             if not command_file.is_absolute():
                 checks["machine_config"] = {"ok": False, "reason": "machine config command_path must be absolute"}
@@ -736,16 +749,16 @@ class AutonomousLoopRuntime:
             checks["global_hooks"] = {"ok": False, "reason": f"missing hooks.json at {hooks_path}"}
         else:
             hooks_json = read_json(hooks_path, None)
-            try:
-                stop_command = hooks_json["hooks"]["Stop"][0]["hooks"][0]["command"] if hooks_json else None
-            except (KeyError, IndexError, TypeError):
-                stop_command = None
-            if machine_ok and machine is not None and stop_command != machine["hook_commands"]["stop"]:
-                checks["global_hooks"] = {
-                    "ok": False,
-                    "reason": "global hooks stop command does not match machine config",
-                    "path": str(hooks_path),
-                }
+            if machine_ok and machine is not None:
+                hooks_ok, hooks_reason = _check_hooks_match(hooks_json, machine)
+                if not hooks_ok:
+                    checks["global_hooks"] = {
+                        "ok": False,
+                        "reason": f"global hooks {hooks_reason}",
+                        "path": str(hooks_path),
+                    }
+                else:
+                    checks["global_hooks"] = {"ok": True, "path": str(hooks_path)}
             else:
                 checks["global_hooks"] = {"ok": True, "path": str(hooks_path)}
 
@@ -780,16 +793,17 @@ class AutonomousLoopRuntime:
                 }
             else:
                 hooks_json = read_json(hooks_repo_path, None)
-                try:
-                    stop_command = hooks_json["hooks"]["Stop"][0]["hooks"][0]["command"] if hooks_json else None
-                except (KeyError, IndexError, TypeError):
-                    stop_command = None
-                if machine_ok and machine is not None and stop_command != machine["hook_commands"]["stop"]:
-                    checks["repo_install"] = {
-                        "ok": False,
-                        "reason": "repo hooks stop command does not match machine config",
-                        "repo_root": str(repo_root),
-                    }
+                if machine_ok and machine is not None:
+                    hooks_ok, hooks_reason = _check_hooks_match(hooks_json, machine)
+                    if not hooks_ok:
+                        checks["repo_install"] = {
+                            "ok": False,
+                            "reason": f"repo hooks {hooks_reason}",
+                            "repo_root": str(repo_root),
+                            "remediation": f"Rerun `autonomous-loop install-repo --repo {repo_root} --force` to update hooks.",
+                        }
+                    else:
+                        checks["repo_install"] = {"ok": True, "repo_root": str(repo_root)}
                 else:
                     checks["repo_install"] = {"ok": True, "repo_root": str(repo_root)}
 
@@ -840,7 +854,8 @@ class AutonomousLoopRuntime:
                     "reason": machine_error,
                 },
             }
-        assert machine is not None
+        if machine is None:
+            return {"ok": False, "error_code": "internal_error", "message": "machine config unexpectedly None after validation"}
 
         try:
             prepared = inspect_repo(

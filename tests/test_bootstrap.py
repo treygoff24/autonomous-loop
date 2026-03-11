@@ -55,6 +55,33 @@ class BootstrapTests(unittest.TestCase):
         assert machine is not None
         self.assertEqual(machine["command_mode"], "absolute-cli")
 
+    def test_bootstrap_does_not_overwrite_existing_global_hooks_without_force(self) -> None:
+        # Pre-write a custom hooks file
+        hooks_path = self.codex_home / "hooks.json"
+        custom_content = json.dumps({"custom": True}) + "\n"
+        hooks_path.write_text(custom_content, encoding="utf-8")
+
+        completed = run_cli(["bootstrap"], env=self.env)
+
+        self.assertEqual(completed.returncode, 0)
+        # Hooks file should be preserved (not overwritten)
+        self.assertEqual(hooks_path.read_text(encoding="utf-8"), custom_content)
+
+    def test_bootstrap_with_force_overwrites_existing_global_hooks(self) -> None:
+        # Pre-write a custom hooks file
+        hooks_path = self.codex_home / "hooks.json"
+        hooks_path.write_text(json.dumps({"custom": True}) + "\n", encoding="utf-8")
+
+        completed = run_cli(["bootstrap", "--force"], env=self.env)
+
+        self.assertEqual(completed.returncode, 0)
+        # Hooks file should be overwritten
+        hooks = load_json(hooks_path)
+        self.assertIsNotNone(hooks)
+        assert hooks is not None
+        self.assertIn("hooks", hooks)
+        self.assertNotIn("custom", hooks)
+
     def test_install_repo_renders_hooks_from_bootstrap_machine_config(self) -> None:
         bootstrap = run_cli(["bootstrap"], env=self.env)
         self.assertEqual(bootstrap.returncode, 0)

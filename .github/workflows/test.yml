@@ -28,6 +28,8 @@ jobs:
           set -euo pipefail
           export CODEX_HOME="$(mktemp -d)"
           smoke_repo="$(mktemp -d)"
+          cleanup() { rm -rf "$CODEX_HOME" "$smoke_repo"; }
+          trap cleanup EXIT
           python - "$smoke_repo" <<'PY'
           import json
           import pathlib
@@ -45,7 +47,7 @@ jobs:
           (repo / "package.json").write_text(json.dumps(package_json, indent=2) + "\n", encoding="utf-8")
           PY
           cd "$smoke_repo"
-          autonomous-loop bootstrap
+          autonomous-loop bootstrap --force
           autonomous-loop doctor
           autonomous-loop install-repo --repo "$PWD" --force
           autonomous-loop doctor --cwd "$PWD"

@@ -139,8 +139,10 @@ class RuntimeStore:
         payload = read_json(self.paths.machine_config_path(), None)
         return payload if isinstance(payload, dict) else None
 
-    def write_global_hooks(self, hook_commands: dict[str, str]) -> str:
+    def write_global_hooks(self, hook_commands: dict[str, str], force: bool = False) -> str | None:
         path = self.paths.codex_home_hooks_path()
+        if path.exists() and not force:
+            return None
         atomic_write_json(path, build_hooks_payload(hook_commands))
         return str(path)
 
