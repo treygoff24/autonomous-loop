@@ -14,6 +14,10 @@ def _json_arg(value: str) -> Any:
     return json.loads(value)
 
 
+def _csv_arg(value: str) -> list[str]:
+    return [item.strip() for item in value.split(",") if item.strip()]
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="autonomous-loop")
     parser.add_argument("--runtime-root", type=Path, default=None)
@@ -42,6 +46,8 @@ def build_parser() -> argparse.ArgumentParser:
     install = subparsers.add_parser("install-repo")
     install.add_argument("--repo", required=True)
     install.add_argument("--force", action="store_true")
+    install.add_argument("--package-manager")
+    install.add_argument("--prefer-scripts", type=_csv_arg)
 
     status = subparsers.add_parser("status")
     status.add_argument("--cwd", required=True)
@@ -87,8 +93,14 @@ def main(argv: list[str] | None = None) -> int:
         return 0
 
     if args.command == "install-repo":
-        emit_json(runtime.install_repo(args.repo, force=args.force))
-        return 0
+        result = runtime.install_repo(
+            args.repo,
+            force=args.force,
+            package_manager=args.package_manager,
+            prefer_scripts=args.prefer_scripts,
+        )
+        emit_json(result)
+        return 1 if result.get("ok") is False else 0
 
     if args.command == "status":
         emit_json(runtime.status(args.cwd, session_id=args.session_id))

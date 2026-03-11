@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import os
 import secrets
 from copy import deepcopy
 from pathlib import Path
@@ -8,6 +9,7 @@ from typing import Any
 from .gates import run_command, run_gate_profile
 from .hashes import stable_hash
 from .hooks import parse_claim_nonce, stop_block, stop_hard_stop
+from .install_repo import InstallRepoFailure, inspect_repo
 from .locks import file_lock
 from .logging_utils import build_file_logger
 from .models import Namespace, PendingRequest, RuntimeState, utc_now
@@ -21,6 +23,14 @@ def _default_limits(project_config: dict[str, Any]) -> dict[str, int]:
         "maxStopIterations": int(defaults.get("maxStopIterations", 12)),
         "maxRepeatedFailureSignature": int(defaults.get("maxRepeatedFailureSignature", 3)),
     }
+
+
+def _codex_session_binding() -> tuple[str, str] | tuple[None, None]:
+    for env_name in ("CODEX_SESSION_ID", "CODEX_THREAD_ID"):
+        value = os.environ.get(env_name)
+        if value:
+            return value, env_name
+    return None, None
 
 
 def _minimal_contract(objective: str, project_config: dict[str, Any], max_iterations: int) -> dict[str, Any]:
@@ -403,6 +413,46 @@ class AutonomousLoopRuntime:
             "repo_root": str(repo_root),
         }
 
+    def _apply_direct_request(
+        self,
+        action: str,
+        cwd: str | Path,
+        payload: dict[str, Any],
+        *,
+        require_existing_state: bool,
+    ) -> dict[str, Any] | None:
+        session_id, source = _codex_session_binding()
+        if session_id is None or source is None:
+            return None
+        repo_root = self.paths.resolve_repo_root(cwd)
+        namespace = self.paths.namespace(repo_root, session_id)
+        if require_existing_state and self.store.load_state(namespace) is None:
+            return None
+        request = PendingRequest(
+            request_id=self.store.next_request_id(),
+            action=action,
+            nonce=secrets.token_hex(8),
+            created_at=utc_now(),
+            status="pending",
+            payload=payload,
+        )
+        self.store.write_project_cache(namespace.repo_hash, str(repo_root))
+        self.store.save_request(namespace.repo_hash, request)
+        state = self._apply_request(namespace, request, repo_root)
+        result = {
+            "action": action,
+            "activation_mode": "direct-env",
+            "repo_root": str(repo_root),
+            "request_id": request.request_id,
+            "session_id": session_id,
+            "session_id_source": source,
+        }
+        if state is not None:
+            result["run_id"] = state.run_id
+            result["contract_hash"] = state.contract_hash
+            result["state"] = state.state
+        return result
+
     def request_enable(
         self,
         cwd: str | Path,
@@ -418,9 +468,25 @@ class AutonomousLoopRuntime:
             contract["tasks"] = task_json
         if gate_profile:
             contract["gateProfile"] = gate_profile
+        direct_result = self._apply_direct_request(
+            "enable",
+            repo_root,
+            {"contract": _normalize_contract(contract, project_config)},
+            require_existing_state=False,
+        )
+        if direct_result is not None:
+            return direct_result
         return self._queue_request("enable", repo_root, {"contract": _normalize_contract(contract, project_config)})
 
     def request_action(self, action: str, cwd: str | Path, reason: str | None = None) -> dict[str, Any]:
+        direct_result = self._apply_direct_request(
+            action,
+            cwd,
+            {"reason": reason},
+            require_existing_state=True,
+        )
+        if direct_result is not None:
+            return direct_result
         return self._queue_request(action, cwd, {"reason": reason})
 
     def _apply_request(self, namespace: Namespace, request: PendingRequest, repo_root: Path) -> RuntimeState | None:
@@ -606,10 +672,47 @@ class AutonomousLoopRuntime:
             sessions = [state.to_dict()] if state else []
         return {"repo_root": str(repo_root), "repo_hash": repo_hash, "sessions": sessions, "pending_requests": requests}
 
-    def install_repo(self, repo_root: str | Path, force: bool = False) -> dict[str, Any]:
+    def install_repo(
+        self,
+        repo_root: str | Path,
+        force: bool = False,
+        package_manager: str | None = None,
+        prefer_scripts: list[str] | None = None,
+    ) -> dict[str, Any]:
         repo = self.paths.resolve_repo_root(repo_root)
-        copied = self.store.install_repo_templates(self.template_root, repo, force=force)
-        return {"repo_root": str(repo), "copied": copied}
+        try:
+            prepared = inspect_repo(
+                repo,
+                package_manager_override=package_manager,
+                prefer_scripts=prefer_scripts,
+            )
+        except InstallRepoFailure as exc:
+            return exc.to_payload(repo)
+
+        copied: list[str] = []
+        warnings = list(prepared["warnings"])
+        config_path = self.store.write_generated_project_config(
+            repo,
+            prepared["project_config"],
+            force=force,
+        )
+        if config_path is None:
+            warnings.append(
+                "Existing .codex/autoloop.project.json was preserved; rerun with --force to overwrite it."
+            )
+        else:
+            copied.append(config_path)
+        copied.extend(self.store.install_repo_templates(self.template_root, repo, force=force))
+        return {
+            "ok": True,
+            "repo_root": str(repo),
+            "package_manager_detected": prepared["package_manager_detected"],
+            "scripts_detected": prepared["scripts_detected"],
+            "commands_generated": prepared["commands_generated"],
+            "gate_profiles_generated": prepared["gate_profiles_generated"],
+            "copied": copied,
+            "warnings": warnings,
+        }
 
 
 AutonomousLoopController = AutonomousLoopRuntime

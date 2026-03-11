@@ -122,10 +122,16 @@ class RuntimeStore:
     def append_event(self, namespace, payload: dict[str, Any]) -> None:
         append_jsonl(self.paths.events_log_path(namespace), payload)
 
+    def write_generated_project_config(self, repo_root: Path, payload: dict[str, Any], force: bool = False) -> str | None:
+        path = repo_root / ".codex" / "autoloop.project.json"
+        if path.exists() and not force:
+            return None
+        atomic_write_json(path, payload)
+        return str(path)
+
     def install_repo_templates(self, template_root: Path, repo_root: Path, force: bool = False) -> list[str]:
         copied: list[str] = []
         mapping = [
-            (template_root / ".codex" / "autoloop.project.json", repo_root / ".codex" / "autoloop.project.json"),
             (template_root / ".codex" / "hooks.json", repo_root / ".codex" / "hooks.json"),
             (
                 template_root / ".agents" / "skills" / "autonomous-loop" / "SKILL.md",

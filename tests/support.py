@@ -4,7 +4,9 @@ import dataclasses
 import importlib
 import inspect
 import json
+import subprocess
 import sys
+import tempfile
 from pathlib import Path
 from typing import Any
 
@@ -37,6 +39,7 @@ CAPABILITY_NAMES = {
     "stop": ("stop", "evaluate_stop", "stop_hook", "run_stop_gate", "check_stop", "gate_stop"),
     "pause": ("pause", "pause_run"),
     "resume": ("resume", "resume_run"),
+    "install_repo": ("install_repo", "install", "install_into_repo"),
     "wrap_hook": (
         "wrap_hook_result",
         "hook_wrapper",
@@ -295,3 +298,51 @@ def meaningful_text(value: Any) -> str:
     if isinstance(value, bytes):
         return value.decode()
     return str(value)
+
+
+def make_temp_repo(prefix: str = "autonomous-loop-test-") -> Path:
+    return Path(tempfile.mkdtemp(prefix=prefix))
+
+
+def make_node_repo(
+    root: Path,
+    *,
+    package_manager: str | None = None,
+    scripts: dict[str, str] | None = None,
+    lockfiles: tuple[str, ...] = (),
+) -> Path:
+    root.mkdir(parents=True, exist_ok=True)
+    package_json: dict[str, Any] = {
+        "name": "fixture-repo",
+        "private": True,
+        "version": "0.0.0",
+        "scripts": scripts or {},
+    }
+    if package_manager is not None:
+        package_json["packageManager"] = package_manager
+
+    (root / "package.json").write_text(json.dumps(package_json, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+    for lockfile in lockfiles:
+        (root / lockfile).write_text("# fixture\n", encoding="utf-8")
+    return root
+
+
+def load_installed_project_config(repo_root: Path) -> dict[str, Any] | None:
+    return load_json(repo_root / ".codex" / "autoloop.project.json")
+
+
+def run_install_repo_cli(
+    repo_root: Path,
+    *,
+    force: bool = False,
+    package_manager: str | None = None,
+    prefer_scripts: list[str] | None = None,
+) -> subprocess.CompletedProcess[str]:
+    command = [sys.executable, str(BIN_ROOT / "autoloop_cli.py"), "install-repo", "--repo", str(repo_root)]
+    if force:
+        command.append("--force")
+    if package_manager is not None:
+        command.extend(["--package-manager", package_manager])
+    if prefer_scripts:
+        command.extend(["--prefer-scripts", ",".join(prefer_scripts)])
+    return subprocess.run(command, cwd=PROJECT_ROOT, capture_output=True, text=True, check=False)

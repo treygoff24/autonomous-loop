@@ -1,9 +1,16 @@
 from __future__ import annotations
 
+import os
 import shutil
 import tempfile
 import unittest
 from pathlib import Path
+from unittest.mock import patch
+
+TESTS_ROOT = Path(__file__).resolve().parent
+import sys
+if str(TESTS_ROOT) not in sys.path:
+    sys.path.insert(0, str(TESTS_ROOT))
 
 from support import (
     BIN_ROOT,
@@ -18,6 +25,7 @@ from support import (
     normalize_action,
     state_is_active,
 )
+from autonomous_loop.controller import AutonomousLoopRuntime
 
 
 class AutonomousLoopContractTests(unittest.TestCase):
@@ -257,6 +265,22 @@ class AutonomousLoopContractTests(unittest.TestCase):
             "hard_stop",
             "Repeated identical failure signatures should escalate to a hard-stop/manual-intervention state",
         )
+
+    def test_request_enable_binds_directly_when_codex_thread_id_is_available(self) -> None:
+        runtime_root = self.temp_dir / "runtime-root"
+        runtime = AutonomousLoopRuntime(root=runtime_root)
+
+        with patch.dict(os.environ, {"CODEX_THREAD_ID": "direct-thread-123"}, clear=False):
+            result = runtime.request_enable(
+                cwd=self.temp_dir,
+                objective="Bind directly without stop-hook claim",
+            )
+
+        self.assertEqual(result["activation_mode"], "direct-env")
+        self.assertEqual(result["session_id"], "direct-thread-123")
+        status = runtime.status(self.temp_dir, session_id="direct-thread-123")
+        self.assertEqual(len(status["sessions"]), 1)
+        self.assertEqual(status["sessions"][0]["state"], "active")
 
 
 class HookWrapperContractTests(unittest.TestCase):

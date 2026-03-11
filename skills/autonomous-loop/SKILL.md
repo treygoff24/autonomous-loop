@@ -20,7 +20,7 @@ Run:
 autonomous-loop install-repo --repo "$PWD"
 ```
 
-Then make sure the repo-local `.codex/autoloop.project.json` command refs and gate profiles match that repository.
+For Node-style repos, `install-repo` generates `.codex/autoloop.project.json` from `package.json`, `packageManager`, lockfiles, and the supported scripts `typecheck`, `lint`, and `test`. For non-Node repos, install the hooks and repo-local skill, then write `.codex/autoloop.project.json` manually.
 
 ## Enable the loop
 
@@ -32,9 +32,11 @@ Then make sure the repo-local `.codex/autoloop.project.json` command refs and ga
 autonomous-loop request enable --cwd "$PWD" --objective "<objective>" --task-json '<task-json>'
 ```
 
-4. Read the returned `claim_token`.
-5. Include that exact token in your next assistant message, and let that turn end normally. Without the token in `last_assistant_message`, the live `Stop` hook cannot bind the request to the actual Codex session.
-6. Do not claim the loop is active until a later `autonomous-loop status --cwd "$PWD"` call shows the request as applied or the session as active.
+4. Inspect the response:
+   - if it includes `activation_mode: "direct-env"`, the loop is already bound to the current Codex thread
+   - otherwise read the returned `claim_token`
+5. In the fallback path, include that exact token in your next assistant message, and let that turn end normally. Without the token in `last_assistant_message`, the live `Stop` hook cannot bind the request to the actual Codex session.
+6. Do not claim the loop is active until either the direct-env response confirms it or a later `autonomous-loop status --cwd "$PWD"` call shows the request as applied or the session as active.
 
 ## Status
 
@@ -52,12 +54,12 @@ Queue the request:
 autonomous-loop request <pause|resume|disable|release> --cwd "$PWD"
 ```
 
-Then include the returned claim token in your next assistant message and let that turn end so the next real `Stop` hook can claim it.
+If the response includes `activation_mode: "direct-env"`, the change is already bound to the current Codex thread. Otherwise include the returned claim token in your next assistant message and let that turn end so the next real `Stop` hook can claim it.
 
 ## Boundaries
 
 - Do not write mutable runtime state into the repo.
 - Do not register arbitrary shell strings as trusted gates.
-- Do not say the loop is active until the next `Stop` hook has actually claimed the request.
+- Do not say the loop is active until direct-env activation is confirmed or the next `Stop` hook has actually claimed the request.
 - Expect `status` to keep showing `pending` if you check it before that token-bearing assistant turn has ended.
 - If the repo is missing `.codex/autoloop.project.json`, install it before trying to enable anything.

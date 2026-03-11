@@ -62,7 +62,7 @@ Each target repo gets:
 .agents/skills/autonomous-loop/SKILL.md
 ```
 
-Those files are version-controlled and human-reviewable.
+Those files are version-controlled and human-reviewable. `install-repo` generates `.codex/autoloop.project.json` for Node-style repos by inspecting `package.json`, `package.json.packageManager`, lockfiles, and the supported verification scripts `typecheck`, `lint`, and `test`.
 
 ### Mutable runtime state
 
@@ -102,7 +102,12 @@ That means:
 
 The loop is off by default.
 
-The user can enable it mid-session. The runtime cannot rely on normal in-session tool calls to know Codex `session_id`, so it uses a nonce claim handshake:
+The user can enable it mid-session. There are two activation paths:
+
+1. Direct-env activation when the Codex environment exposes a stable identifier such as `CODEX_THREAD_ID` or `CODEX_SESSION_ID`
+2. Fallback nonce-claim activation when those identifiers are unavailable
+
+Fallback handshake:
 
 1. A repo skill runs `autonomous-loop request enable --cwd ... --objective ... --task-json ...`
 2. The CLI writes a pending request and returns a token like `AUTOLOOP_CLAIM:<nonce>`
@@ -111,7 +116,7 @@ The user can enable it mid-session. The runtime cannot rely on normal in-session
 5. The next `Stop` hook sees the token in `last_assistant_message`
 6. The `Stop` hook claims the pending request and binds it to the real `session_id`
 
-The same pattern is used for `pause`, `resume`, `disable`, and `release`.
+The same two-path model is used for `pause`, `resume`, `disable`, and `release`.
 
 ## State machine
 
@@ -127,7 +132,7 @@ Required states:
 Practical interpretation:
 
 - `disabled`: no enforcement
-- `armed`: intent exists, but no claimed session state yet because no `Stop` hook has claimed it
+- `armed`: intent exists, but no claimed session state yet because direct-env binding was unavailable and no `Stop` hook has claimed it
 - `active`: stop hook enforces contract
 - `paused`: state and ledger preserved, enforcement suspended
 - `released`: success path, stop hook no longer blocks
@@ -219,13 +224,13 @@ Example:
 {
   "commands": {
     "typecheck": ["pnpm", "typecheck"],
-    "test": ["pnpm", "test"],
-    "lint": ["pnpm", "lint"]
+    "lint": ["pnpm", "lint"],
+    "test": ["pnpm", "test"]
   },
   "gateProfiles": {
     "fast": ["typecheck"],
-    "default": ["typecheck", "test", "lint"],
-    "final": ["typecheck", "test", "lint"]
+    "default": ["typecheck", "lint", "test"],
+    "final": ["typecheck", "lint", "test"]
   },
   "defaults": {
     "gateProfile": "default",
@@ -243,8 +248,8 @@ The `Stop` hook is the controller. It must:
 
 1. Read JSON from stdin
 2. Resolve repo root from `cwd`
-3. Parse `last_assistant_message` for a claim token
-4. Apply any pending request for that repo and claim token
+3. In the fallback path, parse `last_assistant_message` for a claim token
+4. In the fallback path, apply any pending request for that repo and claim token
 5. Load session state for the real `session_id`
 6. No-op if the loop is not active for that repo plus session
 7. Validate contract and verification integrity
@@ -253,6 +258,8 @@ The `Stop` hook is the controller. It must:
    - run the fast gate profile
    - update ledger and failure counters
    - return `{"decision":"block","reason":"..."}`
+
+Note: the `Stop` hook is still required for ongoing enforcement even when direct-env activation is available. Direct-env removes the need to use `Stop` as the initial claim mechanism.
 10. If tasks are complete:
    - run the final gate profile
    - if gates fail, block with a narrow reason
@@ -295,9 +302,10 @@ The repo-local skill should:
 - inspect `.codex/autoloop.project.json`
 - synthesize a deterministic contract
 - run `autonomous-loop request enable ...`
-- read the returned claim token
-- include it in the next assistant message
-- avoid claiming activation until a later stop event has applied the request
+- inspect the response for `activation_mode: "direct-env"`
+- in the fallback path, read the returned claim token
+- in the fallback path, include it in the next assistant message
+- avoid claiming activation until either direct-env is confirmed or a later stop event has applied the request
 
 It must not pretend runtime state lives in the skill file.
 

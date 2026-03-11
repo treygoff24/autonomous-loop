@@ -24,6 +24,6 @@ Trusted commands are executed with `subprocess.run(..., shell=False)`.
 
 Mutable runtime state lives under `CODEX_HOME/autoloop`, not in the target repo. This reduces cross-repo collisions and keeps controller state out of normal project version control.
 
-## Current limitation
+## Current activation model
 
-Normal in-session Codex tool calls do not expose `session_id`, so loop activation uses a nonce-claim handshake through the next `Stop` hook. `request enable` only arms a pending request. The request becomes active only when a later `Stop` hook sees the exact `AUTOLOOP_CLAIM:<nonce>` token in `last_assistant_message` and binds it to the real session.
+When the environment exposes a stable thread or session identifier such as `CODEX_THREAD_ID` or `CODEX_SESSION_ID`, loop requests bind directly to the live Codex session. When those identifiers are unavailable, activation falls back to the nonce-claim handshake through the next `Stop` hook. In that fallback path, `request enable` only arms a pending request, and the request becomes active only when a later `Stop` hook sees the exact `AUTOLOOP_CLAIM:<nonce>` token in `last_assistant_message` and binds it to the real session.
