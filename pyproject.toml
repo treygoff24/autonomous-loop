@@ -1,0 +1,28 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "autonomous-loop"
+version = "0.1.0"
+description = "Stdlib-first autonomous loop controller runtime"
+requires-python = ">=3.11"
+dependencies = []
+readme = "README.md"
+
+[project.scripts]
+autonomous-loop = "autonomous_loop.cli:main"
+
+[tool.setuptools]
+package-dir = {"" = "src"}
+include-package-data = true
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.setuptools.package-data]
+autonomous_loop = [
+  "resources/templates/.codex/autoloop.project.json",
+  "resources/templates/.codex/hooks.json",
+  "resources/templates/.agents/skills/autonomous-loop/SKILL.md",
+]

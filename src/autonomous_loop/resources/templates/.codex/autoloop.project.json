@@ -1,0 +1,21 @@
+{
+  "version": "0.1",
+  "commands": {
+    "typecheck": ["pnpm", "typecheck"],
+    "test": ["pnpm", "test"],
+    "lint": ["pnpm", "lint"]
+  },
+  "gateProfiles": {
+    "fast": ["typecheck"],
+    "default": ["typecheck", "test", "lint"],
+    "final": ["typecheck", "test", "lint"]
+  },
+  "defaults": {
+    "gateProfile": "default",
+    "fastGateProfile": "fast",
+    "finalGateProfile": "final",
+    "maxStopIterations": 12,
+    "maxRepeatedFailureSignature": 3
+  },
+  "semanticReview": "advisory-after-green"
+}
