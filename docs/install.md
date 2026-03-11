@@ -44,3 +44,12 @@ Important:
 ## 5. Restart Codex if needed
 
 Codex usually notices new skills automatically, but a restart is still the safest path after first install.
+
+## 6. Expect the activation boundary
+
+When you later run `autonomous-loop request enable ...` inside Codex:
+
+- the CLI immediately creates a pending request
+- the request does not become active until the next real `Stop` hook for that session
+- the assistant must include the returned `AUTOLOOP_CLAIM:<nonce>` token in the final message of that turn
+- checking `autonomous-loop status --cwd "$PWD"` before that turn ends can still show `pending`

@@ -26,4 +26,4 @@ Mutable runtime state lives under `CODEX_HOME/autoloop`, not in the target repo.
 
 ## Current limitation
 
-Normal in-session Codex tool calls do not expose `session_id`, so loop activation uses a nonce-claim handshake through the next `Stop` hook.
+Normal in-session Codex tool calls do not expose `session_id`, so loop activation uses a nonce-claim handshake through the next `Stop` hook. `request enable` only arms a pending request. The request becomes active only when a later `Stop` hook sees the exact `AUTOLOOP_CLAIM:<nonce>` token in `last_assistant_message` and binds it to the real session.

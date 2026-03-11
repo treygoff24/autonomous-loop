@@ -11,15 +11,16 @@ Check:
 
 ## Enable Request Never Activates
 
-The stop hook only binds a pending request if the next assistant message includes the claim token.
+The stop hook only binds a pending request when the next real turn-ending `Stop` event sees the claim token in `last_assistant_message`.
 
 Expected pattern:
 
 1. the skill runs `autonomous-loop request enable ...`
 2. the CLI returns `AUTOLOOP_CLAIM:<nonce>`
 3. the assistant includes that exact token in its next message
+4. that token-bearing turn actually ends, so Codex emits a `Stop` hook
 
-If the token is missing or changed, the request stays pending.
+If the token is missing, changed, or the turn has not ended yet, the request stays pending.
 
 ## Status Shows Pending Requests But No Session State
 
@@ -29,7 +30,10 @@ Check:
 
 1. there was another assistant turn after the request
 2. that turn contained the exact claim token
-3. the repo path in the request matches the current working repo
+3. that turn actually ended and triggered a `Stop` hook
+4. the repo path in the request matches the current working repo
+
+Same-turn `status` checks are expected to show `pending` until that stop event happens.
 
 ## Hook Fails Closed With Contract Hash Mismatch
 
@@ -65,7 +69,7 @@ If the same blocker repeats too many times, the runtime marks the run failed and
 
 ## Pause Or Resume Does Nothing
 
-Pause and resume are also pending requests. They must be claimed through the same nonce token flow as enable.
+Pause, resume, disable, and release are also pending requests. They must be claimed through the same nonce token flow as enable.
 
 Check pending requests with:
 

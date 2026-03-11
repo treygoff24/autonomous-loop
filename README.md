@@ -6,7 +6,7 @@ They'll also report things as done that simply are not done.
 
 `autonomous-loop` fixes that. point your agent here to have your agent explain it to you and install it locally for you: agent-implementation-brief.md
 
-`autonomous-loop` gives Codex a stricter definition of done. You turn it on for one repo and one session. From that point on, the stop hook checks a frozen contract, looks at the real repo state, runs the trusted gate commands you chose in repo config, and blocks exit until those checks pass. If something looks corrupted or suspicious, it fails closed instead of trusting the model.
+`autonomous-loop` gives Codex a stricter definition of done. You arm it for one repo and one session, then the next real `Stop` hook claims that request for the live session. From that point on, the stop hook checks a frozen contract, looks at the real repo state, runs the trusted gate commands you chose in repo config, and blocks exit until those checks pass. If something looks corrupted or suspicious, it fails closed instead of trusting the model.
 
 If you do not care about the internal mechanics, the short version is simple. Install the package. Install the repo templates. Add the hook config. Use the skill to enable the loop for a task. After that, Codex keeps working until the plan is actually finished or the controller hard-stops the run because something is wrong.
 
@@ -22,11 +22,11 @@ When you enable the loop, the runtime freezes a contract for the current task. T
 
 From there, the `Stop` hook becomes the controller. Every time Codex tries to end a turn, the hook checks whether the current repo and session are loop-controlled. If they are, it recomputes evidence from the real filesystem, runs the trusted gate commands from repo config, updates the ledger, and either blocks the stop or allows it. If the contract hash changed unexpectedly, or the runtime state is unreadable, or the same failure repeats too many times, the controller hard-stops the run instead of pretending things are fine.
 
-There is one awkward part in the current Codex hook model: normal in-session tool calls do not expose `session_id`. So activation uses a nonce claim handshake. The CLI writes a pending enable request and returns a token like `AUTOLOOP_CLAIM:<nonce>`. The assistant includes that token in its next message. The next `Stop` hook sees it, binds the request to the real session, and takes over. It is not glamorous, but it is reliable, and it keeps the scope correct.
+There is one awkward part in the current Codex hook model: normal in-session tool calls do not expose `session_id`. So activation uses a nonce claim handshake. The CLI writes a pending enable request and returns a token like `AUTOLOOP_CLAIM:<nonce>`. The assistant includes that token in its next message, then that turn must actually end so Codex emits a `Stop` hook. That `Stop` hook sees the token in `last_assistant_message`, binds the request to the real session, and takes over. It is not glamorous, but it is reliable, and it keeps the scope correct.
 
 ## What this feels like in practice
 
-You work normally until you are ready to hand the task to the agent in a serious way. Then you enable the loop with the /autonomous-loop skill. At that point, the agent cannot casually “wrap up” just because it thinks the coding part feels done. The contract still has to be satisfied. The evidence still has to line up. The gates still have to pass. If they do not, the hook sends the agent back into the loop with a narrow reason.
+You work normally until you are ready to hand the task to the agent in a serious way. Then you enable the loop with the /autonomous-loop skill. The request is armed immediately, but enforcement does not start until the next `Stop` hook claims it for the live session. After that, the agent cannot casually “wrap up” just because it thinks the coding part feels done. The contract still has to be satisfied. The evidence still has to line up. The gates still have to pass. If they do not, the hook sends the agent back into the loop with a narrow reason.
 
 That is the practical value here. It reduces the number of fake finishes, half-finished implementations, and “trust me, it works” exits you need to babysit.
 
@@ -51,6 +51,13 @@ Then do three small setup steps:
 3. Adjust the trusted commands in `.codex/autoloop.project.json` for the target repo.
 
 Once that is in place, use the `autonomous-loop` skill inside Codex to enable the loop for the current task.
+
+Important for testing inside Codex CLI:
+
+- `request enable` only queues a pending request
+- the request is not active until the next real `Stop` hook claims it
+- that means `autonomous-loop status --cwd "$PWD"` can still show `pending` during the same active turn that printed the claim token
+- the expected activation point is the end of the next assistant turn whose final message includes the exact token
 
 ## Repo and session isolation
 

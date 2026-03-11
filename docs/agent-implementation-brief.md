@@ -107,8 +107,9 @@ The user can enable it mid-session. The runtime cannot rely on normal in-session
 1. A repo skill runs `autonomous-loop request enable --cwd ... --objective ... --task-json ...`
 2. The CLI writes a pending request and returns a token like `AUTOLOOP_CLAIM:<nonce>`
 3. The assistant includes that exact token in its next reply
-4. The next `Stop` hook sees the token in `last_assistant_message`
-5. The `Stop` hook claims the pending request and binds it to the real `session_id`
+4. That reply must actually finish so Codex emits a `Stop` hook
+5. The next `Stop` hook sees the token in `last_assistant_message`
+6. The `Stop` hook claims the pending request and binds it to the real `session_id`
 
 The same pattern is used for `pause`, `resume`, `disable`, and `release`.
 
@@ -126,7 +127,7 @@ Required states:
 Practical interpretation:
 
 - `disabled`: no enforcement
-- `armed`: intent exists, but no claimed session state yet
+- `armed`: intent exists, but no claimed session state yet because no `Stop` hook has claimed it
 - `active`: stop hook enforces contract
 - `paused`: state and ledger preserved, enforcement suspended
 - `released`: success path, stop hook no longer blocks
@@ -296,6 +297,7 @@ The repo-local skill should:
 - run `autonomous-loop request enable ...`
 - read the returned claim token
 - include it in the next assistant message
+- avoid claiming activation until a later stop event has applied the request
 
 It must not pretend runtime state lives in the skill file.
 
@@ -394,5 +396,6 @@ The system is done when all of the following are true:
 - do not hardcode a personal home directory
 - do not assume only one repo or one session exists
 - do not bury the real control flow in vague prose
+- do not imply that printing the token alone activates the loop before a real `Stop` hook runs
 
 If you are an implementation agent receiving this file, treat it as the canonical system brief and build the system end to end.
