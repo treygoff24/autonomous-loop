@@ -1,36 +1,61 @@
-improved Ralph loop hook for Codex CLI v0.114.0+. keep your Codex agents from exiting and stopping before the implementation plan is completed. Hardened against agent tampering to cheat/manipulate early exits.
+# Autonomous Loop
 
-While the GPT model family is great, it's fatal flaw is early exits. you tell Codex to implement the whole plan without stopping, it does phase 1, stops, reports progress, meaning you have to babysit it, taxing your cognitive RAM in the process.
+`autonomous-loop` is a Codex hook runtime that keeps a task open until deterministic evidence and trusted repo-defined gates say it is done.
 
-They'll also report things as done that simply are not done.
+The runtime is intentionally outside the model loop. Codex can propose the contract and do the work, but the `Stop` hook checks the real repo state, runs the trusted commands from repo config, and decides whether the session can end. That reduces the common failure mode where the agent reports completion before the task is actually green.
 
-`autonomous-loop` fixes that. point your agent here to have your agent explain it to you and install it locally for you: agent-implementation-brief.md
+## What It Does
 
-`autonomous-loop` gives Codex a stricter definition of done. You arm it for one repo and one session. In environments that expose a stable thread or session identifier, the request binds immediately to the live session. Otherwise, the next real `Stop` hook claims it. From that point on, the stop hook checks a frozen contract, looks at the real repo state, runs the trusted gate commands you chose in repo config, and blocks exit until those checks pass. If something looks corrupted or suspicious, it fails closed instead of trusting the model.
+When you enable the loop, the runtime freezes a contract for the current task. That contract records:
 
-If you do not care about the internal mechanics, the short version is simple. Install the package. Install the repo templates. Add the hook config. Use the skill to enable the loop for a task. After that, Codex keeps working until the plan is actually finished or the controller hard-stops the run because something is wrong.
+- the objective
+- the required tasks
+- the evidence each task needs
+- the gate profile that decides whether the run can release
 
-## Why this exists
+Mutable runtime state lives under `$CODEX_HOME/autoloop`, not inside the target repo. The repo only carries its local policy in `.codex/autoloop.project.json` plus the repo-local support files installed by `install-repo`.
 
-Without a controller like this, an agent can cheat in soft ways that are hard to catch in the moment. It can claim success early. It can skip the hard gates. It can rewrite the story of what happened after the fact. None of that requires malicious intent. It is just the natural failure mode of a system that is rewarded for sounding complete.
+At each real `Stop` hook, the runtime:
 
-This project moves the definition of success out of the model’s self-report and into a separate runtime. The model can help draft the contract, but it does not get to declare that contract satisfied. The model can run commands, but it does not get to invent the commands that judge it. That separation keeps smarter but still lazy models like GPT 5.4 from simply breaking the enforcement mechanisms instead of finishing the task at hand.
+1. resolves the active repo and session
+2. validates the saved contract and verification bundle
+3. re-evaluates deterministic task evidence from the filesystem
+4. runs the trusted commands referenced by the configured gate profile
+5. blocks, releases, or hard-stops based on those results
 
-## What it actually does
+If the contract hash changes unexpectedly, required runtime files are unreadable, or the same blocker repeats too many times, the runtime fails closed.
 
-When you enable the loop, the runtime freezes a contract for the current task. That contract names the objective, the required tasks, the evidence each task needs, and the gate profile that decides whether the run can end. The runtime stores its mutable state under `CODEX_HOME/autoloop`, not inside the target repo, so multiple repos and multiple Codex sessions can coexist cleanly.
+## Activation Model
 
-From there, the `Stop` hook becomes the controller. Every time Codex tries to end a turn, the hook checks whether the current repo and session are loop-controlled. If they are, it recomputes evidence from the real filesystem, runs the trusted gate commands from repo config, updates the ledger, and either blocks the stop or allows it. If the contract hash changed unexpectedly, or the runtime state is unreadable, or the same failure repeats too many times, the controller hard-stops the run instead of pretending things are fine.
+There are two request paths.
 
-There are two activation paths now. When the Codex environment exposes a stable thread or session identifier such as `CODEX_THREAD_ID`, `request enable` binds immediately to that live session and does not need a claim-token handshake. When that identifier is unavailable, activation falls back to the nonce claim handshake: the CLI writes a pending enable request and returns a token like `AUTOLOOP_CLAIM:<nonce>`, the assistant includes that token in its next message, and the next real `Stop` hook binds the request to the live session.
+### `direct-env`
 
-## What this feels like in practice
+If the Codex environment exposes `CODEX_SESSION_ID` or `CODEX_THREAD_ID`, `autonomous-loop request enable` binds immediately to that live session. The CLI response includes:
 
-You work normally until you are ready to hand the task to the agent in a serious way. Then you enable the loop with the /autonomous-loop skill. In direct-env mode, enforcement is live immediately. In fallback mode, enforcement starts once the next `Stop` hook claims the request for the live session. After that, the agent cannot casually “wrap up” just because it thinks the coding part feels done. The contract still has to be satisfied. The evidence still has to line up. The gates still have to pass. If they do not, the hook sends the agent back into the loop with a narrow reason.
+- `activation_mode: "direct-env"`
+- `session_id`
+- `session_id_source`
 
-That is the practical value here. It reduces the number of fake finishes, half-finished implementations, and “trust me, it works” exits you need to babysit.
+For follow-up actions, `request pause`, `request resume`, `request disable`, and `request release` use the same immediate path only when that session already has loop state.
 
-## Quickstart
+### Fallback claim-token activation
+
+If no live session identifier is available, the CLI stores a pending request and returns JSON with a `claim_token` field whose value looks like:
+
+```text
+AUTOLOOP_CLAIM:<nonce>
+```
+
+In that path:
+
+1. include the exact token in the next assistant message
+2. let that turn end normally
+3. the next real `Stop` hook claims the request for the live session
+
+Until that stop event happens, `autonomous-loop status --cwd "$PWD"` can still show the request as pending.
+
+## Install
 
 Install the package:
 
@@ -38,64 +63,75 @@ Install the package:
 python3 -m pip install .
 ```
 
-Install the repo templates into a target project:
+Install repo-local support files into a target project:
 
 ```bash
 autonomous-loop install-repo --repo /path/to/repo
 ```
 
-`install-repo` now generates `.codex/autoloop.project.json` for Node-style repos by inspecting:
+For Node-style repos, `install-repo` currently:
 
-- `package.json`
-- `package.json.packageManager`
-- lockfiles
-- the supported verification scripts `typecheck`, `lint`, and `test`
+- requires `package.json`
+- detects the package manager with this precedence:
+  - `--package-manager`
+  - `package.json.packageManager`
+  - lockfiles
+- trusts only these script names: `typecheck`, `lint`, `test`
+- generates `.codex/autoloop.project.json`
+- copies `.codex/hooks.json`
+- copies `.agents/skills/autonomous-loop/SKILL.md`
+- preserves existing copies of those repo-local files unless you pass `--force`
 
-Use overrides for edge cases:
+The generated config contains explicit argv arrays for trusted commands plus `fast`, `default`, and `final` gate profiles.
+
+Example overrides:
 
 ```bash
-autonomous-loop install-repo --repo /path/to/repo --package-manager npm --prefer-scripts lint,test
+autonomous-loop install-repo --repo /path/to/repo --package-manager npm
+autonomous-loop install-repo --repo /path/to/repo --prefer-scripts lint,test
 ```
 
-Current v1 scope is Node-style repos with `package.json`. For non-Node repos, install the hooks and skill, then write `.codex/autoloop.project.json` manually.
+`--prefer-scripts` is a single comma-separated argument.
 
-Then do two small setup steps:
+Current `install-repo` autodetect scope is Node-style repos with `package.json`. For non-Node repos, install the repo-local support files you need and write `.codex/autoloop.project.json` manually.
 
-1. Copy [`skills/autonomous-loop/SKILL.md`](skills/autonomous-loop/SKILL.md) into your Codex skills directory.
-2. Merge [`templates/.codex/hooks.json`](templates/.codex/hooks.json) into the `hooks.json` file for the Codex config layer you actually use.
+## Codex Setup
 
-Once that is in place, use the `autonomous-loop` skill inside Codex to enable the loop for the current task.
+Repo-local install is not the whole setup. To use the loop from Codex, also:
 
-Important for testing inside Codex CLI:
+1. copy [`skills/autonomous-loop/SKILL.md`](skills/autonomous-loop/SKILL.md) to `$CODEX_HOME/skills/autonomous-loop/SKILL.md`
+2. merge [`templates/.codex/hooks.json`](templates/.codex/hooks.json) into the `hooks.json` file for the Codex config layer you actually use
 
-- if `request enable` returns `activation_mode: "direct-env"`, the loop is already bound to the current session
-- otherwise the request is pending until the next real `Stop` hook claims it
-- in the fallback path, `autonomous-loop status --cwd "$PWD"` can still show `pending` during the same active turn that printed the claim token
-- in the fallback path, the expected activation point is the end of the next assistant turn whose final message includes the exact token
+If `$CODEX_HOME` is unset, Codex usually defaults to `~/.codex`.
 
-## Repo and session isolation
+## Typical Flow
 
-This system is scoped by `repo_hash + session_id`. That means one noisy run in one repo does not spill into another repo, and two Codex sessions in the same repo can still be tracked separately. Each run gets its own state, contract, verification bundle, ledger, events log, and lock file.
+1. run `autonomous-loop install-repo --repo /path/to/repo`
+2. install the global skill and global hooks
+3. use the `autonomous-loop` skill in Codex
+4. the skill runs `autonomous-loop request enable ...`
+5. confirm whether the response is `direct-env` or fallback claim-token
+6. work normally until the trusted stop checks release the run
 
-## What engineers should read next
+## Scope and Isolation
 
-If you want the operational details, start here:
+Runtime state is scoped by `repo_hash + session_id`. One repo does not interfere with another, and separate Codex sessions in the same repo get separate runtime state, contracts, ledgers, and logs.
+
+## Read Next
 
 - [`docs/install.md`](docs/install.md)
 - [`docs/examples.md`](docs/examples.md)
+- [`TROUBLESHOOTING.md`](TROUBLESHOOTING.md)
 - [`docs/security.md`](docs/security.md)
 - [`docs/agent-implementation-brief.md`](docs/agent-implementation-brief.md)
-- [`TROUBLESHOOTING.md`](TROUBLESHOOTING.md)
 
-If you want the short version for a coding agent, hand it [`agent-implementation-brief.md`](docs/agent-implementation-brief.md). That file is written as a direct system brief, not marketing copy.
-
-## Current hook assumptions
+## Current Assumptions
 
 This project is built around the verified Codex CLI `0.114.0` hook model:
 
-- `SessionStart` and `Stop` exist
+- `SessionStart` and `Stop` hooks exist
 - hooks are discovered from `hooks.json`
 - `Stop` groups are discovered without a matcher
-- only `command` hooks are currently usable for this controller
+- this controller currently relies on command hooks
 
 The main upstream quirk is that live hook registration belongs in `hooks.json`, not `config.toml`.

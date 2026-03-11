@@ -258,8 +258,6 @@ The `Stop` hook is the controller. It must:
    - run the fast gate profile
    - update ledger and failure counters
    - return `{"decision":"block","reason":"..."}`
-
-Note: the `Stop` hook is still required for ongoing enforcement even when direct-env activation is available. Direct-env removes the need to use `Stop` as the initial claim mechanism.
 10. If tasks are complete:
    - run the final gate profile
    - if gates fail, block with a narrow reason
@@ -269,6 +267,8 @@ Note: the `Stop` hook is still required for ongoing enforcement even when direct
 12. If iteration or repeated-failure thresholds are exceeded:
    - mark the run `failed`
    - return `{"continue":false,"stopReason":"..."}`
+
+Note: the `Stop` hook is still required for ongoing enforcement even when direct-env activation is available. Direct-env removes the need to use `Stop` as the initial claim mechanism.
 
 ## SessionStart hook behavior
 

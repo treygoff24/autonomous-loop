@@ -11,7 +11,7 @@ Check:
 
 ## Install-Repo Fails With Missing package.json
 
-`install-repo` v1 autodetect currently supports Node-style repos only.
+`install-repo` autodetect currently supports Node-style repos only.
 
 Check:
 
@@ -46,7 +46,7 @@ Autodetect only trusts these script names:
 Fix:
 
 1. add at least one of those scripts to `package.json`
-2. or rerun with `--prefer-scripts` using only scripts that are already present
+2. or rerun with `--prefer-scripts` using only those supported names that are already present
 
 ## Enable Request Never Activates
 
@@ -115,7 +115,7 @@ If the same blocker repeats too many times, the runtime marks the run failed and
 
 ## Pause Or Resume Does Nothing
 
-Pause, resume, disable, and release follow the same two-path model as enable. In direct-env mode they apply immediately. In fallback mode they are pending requests that must be claimed through the same nonce token flow as enable.
+Pause, resume, disable, and release follow the same two-path model as enable. In `direct-env` mode they apply immediately only when the current session already has loop state. Otherwise they are pending requests that must be claimed through the same nonce token flow as enable.
 
 Check pending requests with:
 

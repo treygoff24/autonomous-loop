@@ -5,7 +5,7 @@ description: Install and control the Codex autonomous-loop runtime. Use this whe
 
 ## Codex usage
 
-- Purpose: install repo templates, wire the current repo to the shared runtime, and operate the current repo plus current session loop.
+- Purpose: install repo-local support files, wire the current repo to the shared runtime, and operate the current repo plus current session loop.
 - Reads: the current repo plus this cloned autonomous-loop repo.
 - Writes: repo-local `.codex/autoloop.project.json`, repo-local skill files, and pending runtime requests under `CODEX_HOME/autoloop/`.
 - Runtime state does not live in this skill directory.
@@ -20,7 +20,7 @@ Run:
 autonomous-loop install-repo --repo "$PWD"
 ```
 
-For Node-style repos, `install-repo` generates `.codex/autoloop.project.json` from `package.json`, `packageManager`, lockfiles, and the supported scripts `typecheck`, `lint`, and `test`. For non-Node repos, install the hooks and repo-local skill, then write `.codex/autoloop.project.json` manually.
+For Node-style repos, `install-repo` requires `package.json`, detects the package manager from `--package-manager`, `package.json.packageManager`, or lockfiles, and trusts only `typecheck`, `lint`, and `test`. `--prefer-scripts` is a single comma-separated argument. For non-Node repos, install the repo-local support files you need, then write `.codex/autoloop.project.json` manually.
 
 ## Enable the loop
 
@@ -33,7 +33,7 @@ autonomous-loop request enable --cwd "$PWD" --objective "<objective>" --task-jso
 ```
 
 4. Inspect the response:
-   - if it includes `activation_mode: "direct-env"`, the loop is already bound to the current Codex thread
+   - if it includes `activation_mode: "direct-env"`, the loop is already bound to the current Codex session
    - otherwise read the returned `claim_token`
 5. In the fallback path, include that exact token in your next assistant message, and let that turn end normally. Without the token in `last_assistant_message`, the live `Stop` hook cannot bind the request to the actual Codex session.
 6. Do not claim the loop is active until either the direct-env response confirms it or a later `autonomous-loop status --cwd "$PWD"` call shows the request as applied or the session as active.
@@ -54,7 +54,9 @@ Queue the request:
 autonomous-loop request <pause|resume|disable|release> --cwd "$PWD"
 ```
 
-If the response includes `activation_mode: "direct-env"`, the change is already bound to the current Codex thread. Otherwise include the returned claim token in your next assistant message and let that turn end so the next real `Stop` hook can claim it.
+If the response includes `activation_mode: "direct-env"`, the change is already bound to the current Codex session. Otherwise include the returned claim token in your next assistant message and let that turn end so the next real `Stop` hook can claim it.
+
+Immediate `direct-env` apply for these follow-up actions only works when the current session already has loop state.
 
 ## Boundaries
 

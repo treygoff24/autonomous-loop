@@ -1,5 +1,7 @@
 # Install-Repo Autodetect Implementation Plan
 
+**Status:** Historical implementation plan. The feature described here landed on March 11, 2026 in commit `49e67bd`. For current behavior, use `README.md`, `docs/install.md`, and `docs/examples.md`.
+
 **Goal:** Make `autonomous-loop install-repo` generate a trustworthy repo-local `.codex/autoloop.project.json` from target-repo evidence instead of copying static `pnpm` assumptions.
 
 **Architecture:** Add a stdlib-only install pipeline in a new `src/autonomous_loop/install_repo.py` module. That module should detect package manager and runnable scripts, build a validated config payload, and return a structured success-or-failure result. Keep `src/autonomous_loop/controller.py` as a thin orchestration layer, keep `src/autonomous_loop/storage.py` responsible for filesystem writes, and leave hook/skill copying static in v1.
@@ -28,7 +30,7 @@
 - Running detected gates during install.
 - Reworking hook merge semantics.
 
-## Current Repo Evidence
+## Pre-Implementation Repo Evidence
 
 | Concern | Current evidence | Why it matters |
 | --- | --- | --- |
@@ -36,7 +38,7 @@
 | Runtime wiring | `src/autonomous_loop/controller.py` resolves the repo root and returns `{"repo_root","copied"}` from `install_repo()`. | There is no detection, validation, or failure contract today. |
 | Write path | `src/autonomous_loop/storage.py` copies `.codex/autoloop.project.json`, `.codex/hooks.json`, and `.agents/skills/autonomous-loop/SKILL.md`. | Dynamic config generation must replace only the config artifact, not all writes. |
 | Static assumptions | `src/autonomous_loop/resources/templates/.codex/autoloop.project.json` hardcodes `pnpm typecheck/test/lint`. | npm/yarn/bun repos can install a broken config successfully. |
-| User-facing drift | `README.md` and `docs/install.md` currently tell users to hand-edit trusted commands after install. | This change should remove that default manual step. |
+| User-facing drift | At plan time, the user-facing install docs still assumed manual command curation after install. | This change should remove that default manual step. |
 | Existing tests | `tests/test_autonomous_loop_contract.py` covers enable/stop/pause/resume only. | Install-path behavior currently has no direct tests. |
 
 ## Current Loop Proof In This Repo
@@ -321,7 +323,7 @@ python3 bin/autoloop_cli.py request enable \
   --task-json '{"id":"T1","title":"Ship install autodetect","required":true,"evidence":[{"kind":"pathChanged","glob":"src/**"},{"kind":"pathChanged","glob":"tests/**"},{"kind":"pathChanged","glob":"docs/**"}]}'
 ```
 
-Expected: either a direct-env response with an already-bound session, or a fallback response with `claim_token`. In the fallback path, the implementer must place that exact token in the final assistant message of that turn, then confirm activation on the next turn with `status`.
+Expected: either a direct-env response with an already-bound session, or a fallback response with a `claim_token` field whose value is the exact `AUTOLOOP_CLAIM:<nonce>` string. In the fallback path, the implementer must place that exact token in the final assistant message of that turn, then confirm activation on the next turn with `status`.
 
 ## Verification Checklist
 

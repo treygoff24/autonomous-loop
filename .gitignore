@@ -11,3 +11,5 @@ dist/
 .mypy_cache/
 .runtime/
 .codex-home/
+/.agents/
+/.codex/

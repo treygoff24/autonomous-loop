@@ -1,6 +1,6 @@
 # Examples
 
-## Install templates into a repo
+## Install repo-local support files into a repo
 
 ```bash
 autonomous-loop install-repo --repo ~/Code/my-app
@@ -18,9 +18,11 @@ autonomous-loop install-repo --repo ~/Code/my-pnpm-app --package-manager pnpm
 autonomous-loop install-repo --repo ~/Code/my-app --prefer-scripts lint,test
 ```
 
+`--prefer-scripts` is a single comma-separated argument.
+
 ## Unsafe install fails closed
 
-If the target repo has `package.json` but none of `typecheck`, `lint`, or `test`, `install-repo` exits non-zero and returns machine-readable JSON explaining the missing evidence and remediation.
+If the target repo has `package.json` but none of `typecheck`, `lint`, or `test`, `install-repo` exits non-zero and returns machine-readable JSON explaining the failure and remediation.
 
 ## Enable the loop for a task
 
@@ -31,13 +33,19 @@ autonomous-loop request enable \
   --task-json '{"id":"T1","title":"Ship the feature","required":true,"evidence":[{"kind":"pathChanged","glob":"src/**"}]}'
 ```
 
-The command returns a claim token like:
+Fallback responses return JSON like:
 
-```text
-AUTOLOOP_CLAIM:abcd1234
+```json
+{
+  "action": "enable",
+  "claim_token": "AUTOLOOP_CLAIM:abcd1234",
+  "nonce": "abcd1234",
+  "repo_root": "/Users/you/Code/my-app",
+  "request_id": "request-0001"
+}
 ```
 
-In environments that expose `CODEX_THREAD_ID` or `CODEX_SESSION_ID`, the response can instead include `activation_mode: "direct-env"` and the live session binding immediately. If the response includes a claim token, include that token in the next assistant message, then let that turn end so the next `Stop` hook can claim the request.
+In environments that expose `CODEX_THREAD_ID` or `CODEX_SESSION_ID`, the response can instead include `activation_mode: "direct-env"` and bind immediately to the live session. If the response includes a `claim_token` field instead, include that exact value in the next assistant message, then let that turn end so the next real `Stop` hook can claim the request.
 
 Important:
 
@@ -58,7 +66,7 @@ autonomous-loop status --cwd "$PWD"
 autonomous-loop request pause --cwd "$PWD"
 ```
 
-If the response uses direct-env activation, the pause applies immediately. Otherwise include the returned claim token in your next assistant message and let that turn end.
+If the response uses `direct-env`, the pause applies immediately. Otherwise include the returned `claim_token` value in your next assistant message and let that turn end. Immediate pause only works when the current session already has loop state.
 
 ## Resume the loop
 
@@ -66,4 +74,4 @@ If the response uses direct-env activation, the pause applies immediately. Other
 autonomous-loop request resume --cwd "$PWD"
 ```
 
-If the response uses direct-env activation, the resume applies immediately. Otherwise include the returned claim token in your next assistant message and let that turn end.
+If the response uses `direct-env`, the resume applies immediately. Otherwise include the returned `claim_token` value in your next assistant message and let that turn end. Immediate resume only works when the current session already has loop state.
