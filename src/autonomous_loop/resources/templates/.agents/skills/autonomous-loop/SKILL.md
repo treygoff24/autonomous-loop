@@ -1,6 +1,6 @@
 ---
 name: autonomous-loop
-description: Control the repo-local autonomous-loop for this repository: enable, status, pause, resume, disable, and release.
+description: "Control the repo-local autonomous-loop for this repository: enable, status, pause, resume, disable, and release."
 ---
 
 # Repo-local autonomous-loop
