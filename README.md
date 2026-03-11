@@ -41,15 +41,17 @@ If Codex was already running when you bootstrapped the machine, restart it once 
 
 `bootstrap` writes the machine-level assets under your Codex home:
 
-- `hooks.json`
-- `skills/autonomous-loop/SKILL.md`
-- `autoloop/machine.json`
+- `$CODEX_HOME/hooks.json`
+- `$CODEX_HOME/skills/autonomous-loop/SKILL.md`
+- `$CODEX_HOME/autoloop/machine.json`
 
 `install-repo` writes the repo-local assets:
 
 - `.codex/autoloop.project.json`
 - `.codex/hooks.json`
 - `.agents/skills/autonomous-loop/SKILL.md`
+
+Pass `--force` to `bootstrap` to overwrite existing global hooks and skill files.
 
 `install-repo` fails closed until machine bootstrap is complete. The repo-local hooks it generates are derived from the verified command path saved during `bootstrap`.
 
@@ -73,6 +75,44 @@ At each real `Stop` hook, the runtime:
 5. blocks, releases, or hard-stops based on those results
 
 If the contract hash changes unexpectedly, required runtime files are unreadable, or the same blocker repeats too many times, the runtime fails closed.
+
+## CLI Reference
+
+### `request enable`
+
+```
+autonomous-loop request enable --cwd <path> --objective <text> \
+  [--task-json '<json>'] ... \
+  [--gate-profile <name>] \
+  [--max-stop-iterations <n>]
+```
+
+- `--cwd` (required) — repo working directory
+- `--objective` (required) — task objective
+- `--task-json` (repeatable, optional) — JSON task definition; may be repeated for multiple tasks
+- `--gate-profile` (optional) — gate profile name
+- `--max-stop-iterations` (optional) — maximum stop-hook iterations before hard-stop
+
+### `request pause / resume / disable / release`
+
+```
+autonomous-loop request pause   --cwd <path> [--reason <text>]
+autonomous-loop request resume  --cwd <path> [--reason <text>]
+autonomous-loop request disable --cwd <path> [--reason <text>]
+autonomous-loop request release --cwd <path> [--reason <text>]
+```
+
+- `--cwd` (required) — repo working directory
+- `--reason` (optional) — human-readable reason logged with the action
+
+### `status`
+
+```
+autonomous-loop status --cwd <path> [--session-id <id>]
+```
+
+- `--cwd` (required) — repo working directory
+- `--session-id` (optional) — inspect a specific session instead of the active one
 
 ## Activation Model
 

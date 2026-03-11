@@ -69,7 +69,25 @@ Fallback responses return JSON like:
 }
 ```
 
-In environments that expose `CODEX_THREAD_ID` or `CODEX_SESSION_ID`, the response can instead include `activation_mode: "direct-env"` and bind immediately to the live session. If the response includes a `claim_token` field instead, include that exact value in the next assistant message, then let that turn end so the next real `Stop` hook can claim the request.
+In environments that expose `CODEX_THREAD_ID` or `CODEX_SESSION_ID`, the response instead binds immediately to the live session and looks like:
+
+```json
+{
+  "action": "enable",
+  "activation_mode": "direct-env",
+  "repo_root": "/Users/you/Code/my-app",
+  "request_id": "...",
+  "session_id": "abc123",
+  "session_id_source": "CODEX_SESSION_ID",
+  "run_id": "abc123",
+  "contract_hash": "...",
+  "state": "active"
+}
+```
+
+`session_id_source` is the name of the environment variable that was read (`CODEX_SESSION_ID` or `CODEX_THREAD_ID`). `run_id`, `contract_hash`, and `state` are only present when an active runtime state exists after the request is applied.
+
+If the response includes a `claim_token` field instead, include that exact value in the next assistant message, then let that turn end so the next real `Stop` hook can claim the request.
 
 ## Check Status
 

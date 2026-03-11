@@ -22,7 +22,6 @@ where = ["src"]
 
 [tool.setuptools.package-data]
 autonomous_loop = [
-  "resources/templates/.codex/autoloop.project.json",
   "resources/templates/.codex/hooks.json",
   "resources/templates/.agents/skills/autonomous-loop/SKILL.md",
 ]

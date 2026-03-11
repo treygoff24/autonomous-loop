@@ -1,42 +1,42 @@
 ---
 name: autonomous-loop
-description: Install and control the Codex autonomous-loop runtime. Use this when the user wants to enable, pause, resume, disable, release, inspect, or install the loop.
+description: "Control the repo-local autonomous-loop for this repository: enable, status, pause, resume, disable, and release."
 ---
 
-## Codex usage
+# Repo-local autonomous-loop
 
-- Purpose: install repo-local support files, wire the current repo to the shared runtime, and operate the current repo plus current session loop.
-- Reads: the current repo plus this cloned autonomous-loop repo.
-- Writes: repo-local `.codex/autoloop.project.json`, repo-local skill files, and pending runtime requests under `CODEX_HOME/autoloop/`.
-- Runtime state does not live in this skill directory.
-
-# Autonomous-loop workflow
-
-## Install a repo
-
-Run:
+Machine bootstrap must already be complete before this repo-local skill is usable. If onboarding is incomplete, stop and tell the user to run:
 
 ```bash
-autonomous-loop install-repo --repo "$PWD"
+autonomous-loop bootstrap
+autonomous-loop install-repo --repo /path/to/repo
+autonomous-loop doctor --cwd /path/to/repo
 ```
 
-For Node-style repos, `install-repo` requires `package.json`, detects the package manager from `--package-manager`, `package.json.packageManager`, or lockfiles, and trusts only `typecheck`, `lint`, and `test`. `--prefer-scripts` is a single comma-separated argument. For non-Node repos, install the repo-local support files you need, then write `.codex/autoloop.project.json` manually.
+Read these files first:
 
-## Enable the loop
+- `.codex/autoloop.project.json`
+- `.agents/skills/autonomous-loop/SKILL.md`
 
-1. Read the current repo-local `.codex/autoloop.project.json`.
-2. Synthesize a small deterministic contract from the current task.
-3. Queue the request:
+Use the shared `autonomous-loop` CLI as the runtime. Mutable state lives under `CODEX_HOME`, not in this repo.
+
+The repo-local hooks in `.codex/hooks.json` were generated from the machine's verified bootstrap command path. If `autonomous-loop doctor --cwd "$PWD"` fails, stop and report the failing checks instead of guessing.
+
+## Enable
+
+When the user asks to enable the loop:
+
+1. Synthesize a compact deterministic contract for the current agreed task.
+2. Run:
 
 ```bash
 autonomous-loop request enable --cwd "$PWD" --objective "<objective>" --task-json '<task-json>'
 ```
 
-4. Inspect the response:
-   - if it includes `activation_mode: "direct-env"`, the loop is already bound to the current Codex session
+3. Inspect the response:
+   - if it includes `activation_mode: "direct-env"`, the loop is already bound to the current Codex thread
    - otherwise read the returned `claim_token`
-5. In the fallback path, include that exact token in your next assistant message, and let that turn end normally. Without the token in `last_assistant_message`, the live `Stop` hook cannot bind the request to the actual Codex session.
-6. Do not claim the loop is active until either the direct-env response confirms it or a later `autonomous-loop status --cwd "$PWD"` call shows the request as applied or the session as active.
+4. In the fallback path, include that exact token in your next assistant message so the next `Stop` hook can bind the request to the live Codex session.
 
 ## Status
 
@@ -48,20 +48,18 @@ autonomous-loop status --cwd "$PWD"
 
 ## Pause, Resume, Disable, Release
 
-Queue the request:
+Queue the matching request:
 
 ```bash
 autonomous-loop request <pause|resume|disable|release> --cwd "$PWD"
 ```
 
-If the response includes `activation_mode: "direct-env"`, the change is already bound to the current Codex session. Otherwise include the returned claim token in your next assistant message and let that turn end so the next real `Stop` hook can claim it.
+If the response includes `activation_mode: "direct-env"`, the change is already bound to the current Codex thread. Otherwise include the returned claim token in your next assistant message.
 
-Immediate `direct-env` apply for these follow-up actions only works when the current session already has loop state.
+## Hard Rules
 
-## Boundaries
-
-- Do not write mutable runtime state into the repo.
-- Do not register arbitrary shell strings as trusted gates.
-- Do not say the loop is active until direct-env activation is confirmed or the next `Stop` hook has actually claimed the request.
-- Expect `status` to keep showing `pending` if you check it before that token-bearing assistant turn has ended.
-- If the repo is missing `.codex/autoloop.project.json`, install it before trying to enable anything.
+- Do not claim the loop is active until direct-env activation is confirmed or a `Stop` hook has actually claimed the request.
+- A direct-env enable response is already active and does not need a claim token.
+- Do not invent verification commands outside `.codex/autoloop.project.json`.
+- Do not continue past a failing `autonomous-loop doctor --cwd "$PWD"` check without telling the user exactly what failed.
+- Do not say work is complete just because the model thinks it is done.

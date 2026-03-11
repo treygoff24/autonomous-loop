@@ -76,7 +76,7 @@ Then match the failure reason:
 
 - missing `.codex/autoloop.project.json`: rerun `autonomous-loop install-repo --repo /path/to/repo`
 - missing `.codex/hooks.json`: rerun `autonomous-loop install-repo --repo /path/to/repo --force`
-- missing repo-local skill: rerun `autonomous-loop install-repo --repo /path/to/repo --force`
+- missing repo-local skill (expected at `.agents/skills/autonomous-loop/SKILL.md`): rerun `autonomous-loop install-repo --repo /path/to/repo --force`
 - repo hooks stop command does not match machine config: rerun `autonomous-loop bootstrap --force`, then `autonomous-loop install-repo --repo /path/to/repo --force`
 
 Re-run:
@@ -95,6 +95,8 @@ autonomous-loop doctor --cwd /path/to/repo
 - `missing_package_manager`: add `packageManager` to `package.json` or pass `--package-manager`
 - `missing_verification_scripts`: define at least one of `typecheck`, `lint`, or `test`
 - `invalid_preferred_script` or `missing_preferred_script`: fix the `--prefer-scripts` list
+- `invalid_package_manager_override`: `--package-manager` was passed with an unsupported value; use one of `npm|pnpm|yarn|bun`
+- `unsupported_package_manager`: `package.json` has a `packageManager` field with an unrecognized value; fix the field or pass `--package-manager` to override
 
 After the install succeeds, validate with:
 
@@ -106,7 +108,7 @@ autonomous-loop doctor --cwd /path/to/repo
 
 There are two activation paths:
 
-1. direct-env activation when the Codex environment exposes `CODEX_THREAD_ID` or `CODEX_SESSION_ID`
+1. direct-env activation when the Codex environment exposes `CODEX_SESSION_ID` or `CODEX_THREAD_ID`
 2. fallback claim-token activation through the next real `Stop` event
 
 If the response from `request enable` includes `activation_mode: "direct-env"`, the loop is already bound to the current session and this section does not apply.
@@ -143,13 +145,15 @@ This means at least one of these changed unexpectedly after activation:
 - `verification.json`
 - `state.json` contract hash field
 
-Inspect the session directory under `$CODEX_HOME/autoloop/repos/<repo_hash>/sessions/<session_id>/`. If the contract really changed, disable or release the run and re-enable it.
+Inspect the session directory under `$CODEX_HOME/autoloop/repos/<repo_hash>/sessions/<safe_session_id>/`, where `<safe_session_id>` is the session ID lowercased with special characters replaced by `-` (the `safe_name()` transform). If the contract really changed, disable or release the run and re-enable it.
 
 ## Final Gates Keep Blocking Release
 
 Inspect:
 
 - `ledger.json`
+- `verification.json`
+- `contract.json`
 - `events.log`
 - `debug.log`
 

@@ -70,6 +70,7 @@ Mutable runtime state never lives in the target repo. It lives under:
 
 ```text
 $CODEX_HOME/autoloop/
+  machine.json
   repos/
     <repo_hash>/
       project-cache.json
@@ -132,7 +133,7 @@ Required states:
 Practical interpretation:
 
 - `disabled`: no enforcement
-- `armed`: intent exists, but no claimed session state yet because direct-env binding was unavailable and no `Stop` hook has claimed it
+- `armed`: transient logical concept only — not persisted to disk; activation always writes `"state": "active"` immediately, whether via direct-env or via the fallback claim path
 - `active`: stop hook enforces contract
 - `paused`: state and ledger preserved, enforcement suspended
 - `released`: success path, stop hook no longer blocks
@@ -321,6 +322,8 @@ Required commands:
 - `autonomous-loop hook stop`
 - `autonomous-loop hook session-start`
 - `autonomous-loop install-repo`
+- `autonomous-loop bootstrap`
+- `autonomous-loop doctor`
 - `autonomous-loop status`
 
 ## Packaging requirements
