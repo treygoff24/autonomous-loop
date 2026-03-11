@@ -5,12 +5,22 @@ description: "Control the repo-local autonomous-loop for this repository: enable
 
 # Repo-local autonomous-loop
 
+Machine bootstrap must already be complete before this repo-local skill is usable. If onboarding is incomplete, stop and tell the user to run:
+
+```bash
+autonomous-loop bootstrap
+autonomous-loop install-repo --repo /path/to/repo
+autonomous-loop doctor --cwd /path/to/repo
+```
+
 Read these files first:
 
 - `.codex/autoloop.project.json`
 - `.agents/skills/autonomous-loop/SKILL.md`
 
 Use the shared `autonomous-loop` CLI as the runtime. Mutable state lives under `CODEX_HOME`, not in this repo.
+
+The repo-local hooks in `.codex/hooks.json` were generated from the machine's verified bootstrap command path. If `autonomous-loop doctor --cwd "$PWD"` fails, stop and report the failing checks instead of guessing.
 
 ## Enable
 
@@ -49,5 +59,7 @@ If the response includes `activation_mode: "direct-env"`, the change is already 
 ## Hard Rules
 
 - Do not claim the loop is active until direct-env activation is confirmed or a `Stop` hook has actually claimed the request.
+- A direct-env enable response is already active and does not need a claim token.
 - Do not invent verification commands outside `.codex/autoloop.project.json`.
+- Do not continue past a failing `autonomous-loop doctor --cwd "$PWD"` check without telling the user exactly what failed.
 - Do not say work is complete just because the model thinks it is done.

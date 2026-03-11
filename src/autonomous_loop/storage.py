@@ -6,6 +6,7 @@ import uuid
 from pathlib import Path
 from typing import Any
 
+from .bootstrap import build_hooks_payload
 from .models import PendingRequest, RuntimeState
 from .paths import RuntimePaths
 
@@ -129,19 +130,41 @@ class RuntimeStore:
         atomic_write_json(path, payload)
         return str(path)
 
-    def install_repo_templates(self, template_root: Path, repo_root: Path, force: bool = False) -> list[str]:
-        copied: list[str] = []
-        mapping = [
-            (template_root / ".codex" / "hooks.json", repo_root / ".codex" / "hooks.json"),
-            (
-                template_root / ".agents" / "skills" / "autonomous-loop" / "SKILL.md",
-                repo_root / ".agents" / "skills" / "autonomous-loop" / "SKILL.md",
-            ),
-        ]
-        for src, dest in mapping:
-            if dest.exists() and not force:
-                continue
-            dest.parent.mkdir(parents=True, exist_ok=True)
-            shutil.copy2(src, dest)
-            copied.append(str(dest))
-        return copied
+    def save_machine_config(self, payload: dict[str, Any]) -> str:
+        path = self.paths.machine_config_path()
+        atomic_write_json(path, payload)
+        return str(path)
+
+    def load_machine_config(self) -> dict[str, Any] | None:
+        payload = read_json(self.paths.machine_config_path(), None)
+        return payload if isinstance(payload, dict) else None
+
+    def write_global_hooks(self, hook_commands: dict[str, str]) -> str:
+        path = self.paths.codex_home_hooks_path()
+        atomic_write_json(path, build_hooks_payload(hook_commands))
+        return str(path)
+
+    def write_repo_hooks(self, repo_root: Path, hook_commands: dict[str, str], force: bool = False) -> str | None:
+        path = repo_root / ".codex" / "hooks.json"
+        if path.exists() and not force:
+            return None
+        atomic_write_json(path, build_hooks_payload(hook_commands))
+        return str(path)
+
+    def install_global_skill(self, template_root: Path, force: bool = False) -> str | None:
+        source = template_root / ".agents" / "skills" / "autonomous-loop" / "SKILL.md"
+        dest = self.paths.global_skill_path()
+        if dest.exists() and not force:
+            return None
+        dest.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(source, dest)
+        return str(dest)
+
+    def install_repo_skill_template(self, template_root: Path, repo_root: Path, force: bool = False) -> str | None:
+        source = template_root / ".agents" / "skills" / "autonomous-loop" / "SKILL.md"
+        dest = repo_root / ".agents" / "skills" / "autonomous-loop" / "SKILL.md"
+        if dest.exists() and not force:
+            return None
+        dest.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(source, dest)
+        return str(dest)

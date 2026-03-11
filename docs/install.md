@@ -1,18 +1,67 @@
 # Install
 
-## 1. Clone and install
+First-time setup is a two-step flow:
+
+1. bootstrap the machine
+2. install support files into each repo
+
+Run `autonomous-loop doctor` after each step. It is the fastest way to see exactly what is missing.
+
+## Machine Setup
+
+Install the package:
 
 ```bash
-git clone https://github.com/<your-org-or-user>/autonomous-loop.git
-cd autonomous-loop
 python3 -m pip install .
 ```
 
-## 2. Install repo-local support files into a target project
+Bootstrap the current machine once:
+
+```bash
+autonomous-loop bootstrap
+```
+
+That command writes:
+
+- `$CODEX_HOME/hooks.json`
+- `$CODEX_HOME/skills/autonomous-loop/SKILL.md`
+- `$CODEX_HOME/autoloop/machine.json`
+
+Verify machine setup:
+
+```bash
+autonomous-loop doctor
+```
+
+Expected result: `ok: true`.
+
+If Codex was already running, restart it once after bootstrap so it reloads the global hooks and skill.
+
+## Repo Setup
+
+Install repo-local support files into a target project:
 
 ```bash
 autonomous-loop install-repo --repo /path/to/repo
 ```
+
+That command currently supports Node-style repos with `package.json`. It writes:
+
+- `.codex/autoloop.project.json`
+- `.codex/hooks.json`
+- `.agents/skills/autonomous-loop/SKILL.md`
+
+It also uses the verified machine command saved by `bootstrap`. If machine bootstrap is missing, `install-repo` exits non-zero with `error_code: "missing_machine_bootstrap"`.
+
+Verify the repo install:
+
+```bash
+autonomous-loop doctor --cwd /path/to/repo
+```
+
+Expected result: `ok: true` with a passing `repo_install` check.
+
+## Repo Detection And Verification Commands
 
 For Node-style repos, `install-repo` currently:
 
@@ -26,58 +75,29 @@ For Node-style repos, `install-repo` currently:
   - `lint`
   - `test`
 
-That command writes:
-
-- `.codex/autoloop.project.json`
-- `.codex/hooks.json`
-- `.agents/skills/autonomous-loop/SKILL.md`
-
-Existing copies of those repo-local files are preserved unless you pass `--force`.
+Existing repo-local files are preserved unless you pass `--force`.
 
 Override examples:
 
 ```bash
 autonomous-loop install-repo --repo /path/to/repo --package-manager npm
 autonomous-loop install-repo --repo /path/to/repo --prefer-scripts lint,test
+autonomous-loop install-repo --repo /path/to/repo --force
 ```
 
 `--prefer-scripts` is a single comma-separated argument.
 
-Current `install-repo` autodetect scope is Node-style repos with `package.json`. For non-Node repos, install the repo-local support files you need, then write `.codex/autoloop.project.json` manually.
+Current autodetect scope is Node-style repos only. For non-Node repos, install the repo-local support files you need and write `.codex/autoloop.project.json` manually.
 
-## 3. Install the global skill
+## Smoke Test
 
-Copy:
+Run the full onboarding path against a real repo:
 
-- `skills/autonomous-loop/SKILL.md`
+```bash
+autonomous-loop bootstrap
+autonomous-loop doctor
+autonomous-loop install-repo --repo /path/to/repo
+autonomous-loop doctor --cwd /path/to/repo
+```
 
-Into:
-
-- `$CODEX_HOME/skills/autonomous-loop/SKILL.md`
-
-If `$CODEX_HOME` is unset, Codex normally defaults to `~/.codex`.
-
-## 4. Register global hooks
-
-Merge `templates/.codex/hooks.json` into the `hooks.json` file for the Codex config layer you want to use.
-
-Important:
-
-- current Codex hook discovery uses `hooks.json`
-- not `config.toml`
-
-## 5. Restart Codex if needed
-
-Codex usually notices new skills automatically, but a restart is still the safest path after first install.
-
-## 6. Expect the activation boundary
-
-When you later run `autonomous-loop request enable ...` inside Codex:
-
-- if the response includes `activation_mode: "direct-env"`, the loop is already bound to the current Codex session
-- otherwise the CLI created a pending request
-- in that fallback path, the request does not become active until the next real `Stop` hook for that session claims it
-- in that fallback path, the assistant must include the returned `AUTOLOOP_CLAIM:<nonce>` token in the final message of that turn
-- in that fallback path, checking `autonomous-loop status --cwd "$PWD"` before that turn ends can still show `pending`
-
-For `pause`, `resume`, `disable`, and `release`, `direct-env` only applies when the current session already has loop state. Otherwise those actions also use the fallback claim-token path.
+If any step fails, start with the failing `doctor` check and follow the matching section in [`TROUBLESHOOTING.md`](../TROUBLESHOOTING.md).

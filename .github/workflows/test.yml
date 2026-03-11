@@ -22,3 +22,30 @@ jobs:
         run: python -m compileall src bin
       - name: Run tests
         run: python -m unittest discover -s tests -v
+      - name: Smoke first-time onboarding
+        shell: bash
+        run: |
+          set -euo pipefail
+          export CODEX_HOME="$(mktemp -d)"
+          smoke_repo="$(mktemp -d)"
+          python - "$smoke_repo" <<'PY'
+          import json
+          import pathlib
+          import sys
+
+          repo = pathlib.Path(sys.argv[1])
+          package_json = {
+              "name": "autonomous-loop-smoke",
+              "private": True,
+              "packageManager": "npm@10.9.0",
+              "scripts": {
+                  "lint": "echo lint"
+              },
+          }
+          (repo / "package.json").write_text(json.dumps(package_json, indent=2) + "\n", encoding="utf-8")
+          PY
+          cd "$smoke_repo"
+          autonomous-loop bootstrap
+          autonomous-loop doctor
+          autonomous-loop install-repo --repo "$PWD" --force
+          autonomous-loop doctor --cwd "$PWD"

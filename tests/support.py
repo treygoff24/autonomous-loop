@@ -4,6 +4,7 @@ import dataclasses
 import importlib
 import inspect
 import json
+import os
 import subprocess
 import sys
 import tempfile
@@ -331,12 +332,96 @@ def load_installed_project_config(repo_root: Path) -> dict[str, Any] | None:
     return load_json(repo_root / ".codex" / "autoloop.project.json")
 
 
+def make_codex_home(root: Path) -> Path:
+    codex_home = root / ".codex"
+    codex_home.mkdir(parents=True, exist_ok=True)
+    return codex_home
+
+
+def write_codex_hooks(codex_home: Path, payload: dict[str, Any]) -> Path:
+    path = codex_home / "hooks.json"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+    return path
+
+
+def read_codex_hooks(codex_home: Path) -> dict[str, Any] | None:
+    return load_json(codex_home / "hooks.json")
+
+
+def write_global_skill(codex_home: Path, content: str = "# autonomous-loop skill\n") -> Path:
+    path = codex_home / "skills" / "autonomous-loop" / "SKILL.md"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(content, encoding="utf-8")
+    return path
+
+
+def read_global_skill(codex_home: Path) -> str | None:
+    path = codex_home / "skills" / "autonomous-loop" / "SKILL.md"
+    try:
+        return path.read_text(encoding="utf-8")
+    except OSError:
+        return None
+
+
+def make_user_bin(root: Path) -> Path:
+    user_bin = root / "bin"
+    user_bin.mkdir(parents=True, exist_ok=True)
+    return user_bin
+
+
+def install_fake_cli(user_bin: Path, target: Path | None = None, *, name: str = "autonomous-loop") -> Path:
+    fake_cli_path = user_bin / name
+    source = target or (BIN_ROOT / "autoloop_cli.py")
+    if fake_cli_path.exists() or fake_cli_path.is_symlink():
+        fake_cli_path.unlink()
+    fake_cli_path.symlink_to(source)
+    return fake_cli_path
+
+
+def build_cli_env(
+    *,
+    codex_home: Path,
+    user_bin: Path | None = None,
+    extra_env: dict[str, str] | None = None,
+) -> dict[str, str]:
+    env = os.environ.copy()
+    env["CODEX_HOME"] = str(codex_home)
+    runtime_root = codex_home / "autoloop"
+    env["AUTONOMOUS_LOOP_HOME"] = str(runtime_root)
+    path_parts = [str(user_bin)] if user_bin is not None else []
+    existing_path = env.get("PATH")
+    if existing_path:
+        path_parts.append(existing_path)
+    env["PATH"] = os.pathsep.join(path_parts)
+    if extra_env:
+        env.update(extra_env)
+    return env
+
+
+def run_cli(
+    args: list[str],
+    *,
+    env: dict[str, str] | None = None,
+    cwd: Path | None = None,
+) -> subprocess.CompletedProcess[str]:
+    return subprocess.run(
+        [sys.executable, str(BIN_ROOT / "autoloop_cli.py"), *args],
+        text=True,
+        capture_output=True,
+        env={**os.environ, **(env or {})},
+        cwd=cwd or PROJECT_ROOT,
+        check=False,
+    )
+
+
 def run_install_repo_cli(
     repo_root: Path,
     *,
     force: bool = False,
     package_manager: str | None = None,
     prefer_scripts: list[str] | None = None,
+    env: dict[str, str] | None = None,
 ) -> subprocess.CompletedProcess[str]:
     command = [sys.executable, str(BIN_ROOT / "autoloop_cli.py"), "install-repo", "--repo", str(repo_root)]
     if force:
@@ -345,4 +430,11 @@ def run_install_repo_cli(
         command.extend(["--package-manager", package_manager])
     if prefer_scripts:
         command.extend(["--prefer-scripts", ",".join(prefer_scripts)])
-    return subprocess.run(command, cwd=PROJECT_ROOT, capture_output=True, text=True, check=False)
+    return subprocess.run(
+        command,
+        cwd=PROJECT_ROOT,
+        capture_output=True,
+        text=True,
+        env={**os.environ, **(env or {})},
+        check=False,
+    )

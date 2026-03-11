@@ -2,9 +2,58 @@
 
 `autonomous-loop` is a Codex hook runtime that keeps a task open until deterministic evidence and trusted repo-defined gates say it is done.
 
-The runtime is intentionally outside the model loop. Codex can propose the contract and do the work, but the `Stop` hook checks the real repo state, runs the trusted commands from repo config, and decides whether the session can end. That reduces the common failure mode where the agent reports completion before the task is actually green.
+## Quickstart
 
-## What It Does
+1. Install the package:
+
+```bash
+python3 -m pip install .
+```
+
+2. Bootstrap this machine once:
+
+```bash
+autonomous-loop bootstrap
+```
+
+3. Install repo-local support files into a target repo:
+
+```bash
+autonomous-loop install-repo --repo /path/to/repo
+```
+
+4. Verify the result:
+
+```bash
+autonomous-loop doctor --cwd /path/to/repo
+```
+
+5. Open Codex in that repo and say: `Use /autonomous-loop for this task.`
+
+If Codex was already running when you bootstrapped the machine, restart it once so it picks up the new global hooks and skill.
+
+## Two-Step Onboarding Model
+
+`autonomous-loop` now has two setup layers:
+
+- Machine bootstrap: `autonomous-loop bootstrap`
+- Repo install: `autonomous-loop install-repo --repo /path/to/repo`
+
+`bootstrap` writes the machine-level assets under your Codex home:
+
+- `hooks.json`
+- `skills/autonomous-loop/SKILL.md`
+- `autoloop/machine.json`
+
+`install-repo` writes the repo-local assets:
+
+- `.codex/autoloop.project.json`
+- `.codex/hooks.json`
+- `.agents/skills/autonomous-loop/SKILL.md`
+
+`install-repo` fails closed until machine bootstrap is complete. The repo-local hooks it generates are derived from the verified command path saved during `bootstrap`.
+
+## What The Runtime Does
 
 When you enable the loop, the runtime freezes a contract for the current task. That contract records:
 
@@ -55,19 +104,7 @@ In that path:
 
 Until that stop event happens, `autonomous-loop status --cwd "$PWD"` can still show the request as pending.
 
-## Install
-
-Install the package:
-
-```bash
-python3 -m pip install .
-```
-
-Install repo-local support files into a target project:
-
-```bash
-autonomous-loop install-repo --repo /path/to/repo
-```
+## Install Notes
 
 For Node-style repos, `install-repo` currently:
 
@@ -77,12 +114,7 @@ For Node-style repos, `install-repo` currently:
   - `package.json.packageManager`
   - lockfiles
 - trusts only these script names: `typecheck`, `lint`, `test`
-- generates `.codex/autoloop.project.json`
-- copies `.codex/hooks.json`
-- copies `.agents/skills/autonomous-loop/SKILL.md`
-- preserves existing copies of those repo-local files unless you pass `--force`
-
-The generated config contains explicit argv arrays for trusted commands plus `fast`, `default`, and `final` gate profiles.
+- preserves existing repo-local files unless you pass `--force`
 
 Example overrides:
 
@@ -94,28 +126,6 @@ autonomous-loop install-repo --repo /path/to/repo --prefer-scripts lint,test
 `--prefer-scripts` is a single comma-separated argument.
 
 Current `install-repo` autodetect scope is Node-style repos with `package.json`. For non-Node repos, install the repo-local support files you need and write `.codex/autoloop.project.json` manually.
-
-## Codex Setup
-
-Repo-local install is not the whole setup. To use the loop from Codex, also:
-
-1. copy [`skills/autonomous-loop/SKILL.md`](skills/autonomous-loop/SKILL.md) to `$CODEX_HOME/skills/autonomous-loop/SKILL.md`
-2. merge [`templates/.codex/hooks.json`](templates/.codex/hooks.json) into the `hooks.json` file for the Codex config layer you actually use
-
-If `$CODEX_HOME` is unset, Codex usually defaults to `~/.codex`.
-
-## Typical Flow
-
-1. run `autonomous-loop install-repo --repo /path/to/repo`
-2. install the global skill and global hooks
-3. use the `autonomous-loop` skill in Codex
-4. the skill runs `autonomous-loop request enable ...`
-5. confirm whether the response is `direct-env` or fallback claim-token
-6. work normally until the trusted stop checks release the run
-
-## Scope and Isolation
-
-Runtime state is scoped by `repo_hash + session_id`. One repo does not interfere with another, and separate Codex sessions in the same repo get separate runtime state, contracts, ledgers, and logs.
 
 ## Read Next
 

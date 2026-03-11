@@ -6,6 +6,7 @@ from copy import deepcopy
 from pathlib import Path
 from typing import Any
 
+from .bootstrap import build_machine_config, resolve_cli_path, validate_machine_config
 from .gates import run_command, run_gate_profile
 from .hashes import stable_hash
 from .hooks import parse_claim_nonce, stop_block, stop_hard_stop
@@ -14,7 +15,7 @@ from .locks import file_lock
 from .logging_utils import build_file_logger
 from .models import Namespace, PendingRequest, RuntimeState, utc_now
 from .paths import RuntimePaths, hash_text
-from .storage import RuntimeStore
+from .storage import RuntimeStore, read_json
 
 
 def _default_limits(project_config: dict[str, Any]) -> dict[str, int]:
@@ -656,6 +657,148 @@ class AutonomousLoopRuntime:
             logger.debug("released run_id=%s", state.run_id)
             return None
 
+    def bootstrap(self, *, force: bool = False) -> dict[str, Any]:
+        command_path, cli_error = resolve_cli_path()
+        if command_path is None:
+            return {
+                "ok": False,
+                "error_code": "cli_not_found",
+                "message": cli_error or "autonomous-loop was not found on PATH",
+            }
+
+        machine_config = build_machine_config(command_path)
+        hook_commands = machine_config["hook_commands"]
+
+        written: list[str] = []
+        hooks_path = self.store.write_global_hooks(hook_commands)
+        written.append(hooks_path)
+
+        skill_path = self.store.install_global_skill(self.template_root, force=force)
+        if skill_path is not None:
+            written.append(skill_path)
+
+        machine_path = self.store.save_machine_config(machine_config)
+        written.append(machine_path)
+
+        return {
+            "ok": True,
+            "command_mode": machine_config["command_mode"],
+            "command_path": machine_config["command_path"],
+            "hook_commands": machine_config["hook_commands"],
+            "machine_config_path": machine_path,
+            "global_hooks_path": hooks_path,
+            "global_skill_path": skill_path or str(self.paths.global_skill_path()),
+            "written": written,
+        }
+
+    def doctor(self, cwd: str | Path | None = None) -> dict[str, Any]:
+        checks: dict[str, dict[str, Any]] = {}
+
+        command_path, cli_error = resolve_cli_path()
+        if command_path is None:
+            checks["cli_on_path"] = {"ok": False, "reason": cli_error}
+        else:
+            checks["cli_on_path"] = {"ok": True, "path": command_path}
+
+        machine = self.store.load_machine_config()
+        machine_ok, machine_error = validate_machine_config(machine)
+        if not machine_ok:
+            checks["machine_config"] = {
+                "ok": False,
+                "reason": machine_error,
+                "path": str(self.paths.machine_config_path()),
+            }
+        else:
+            assert machine is not None
+            command_file = Path(machine["command_path"])
+            if not command_file.is_absolute():
+                checks["machine_config"] = {"ok": False, "reason": "machine config command_path must be absolute"}
+            elif not command_file.exists():
+                checks["machine_config"] = {
+                    "ok": False,
+                    "reason": f"machine config command_path is missing: {command_file}",
+                }
+            elif not os.access(command_file, os.X_OK):
+                checks["machine_config"] = {
+                    "ok": False,
+                    "reason": f"machine config command_path is not executable: {command_file}",
+                }
+            else:
+                checks["machine_config"] = {
+                    "ok": True,
+                    "path": str(self.paths.machine_config_path()),
+                    "command_path": machine["command_path"],
+                    "command_mode": machine["command_mode"],
+                }
+
+        hooks_path = self.paths.codex_home_hooks_path()
+        if not hooks_path.is_file():
+            checks["global_hooks"] = {"ok": False, "reason": f"missing hooks.json at {hooks_path}"}
+        else:
+            hooks_json = read_json(hooks_path, None)
+            try:
+                stop_command = hooks_json["hooks"]["Stop"][0]["hooks"][0]["command"] if hooks_json else None
+            except (KeyError, IndexError, TypeError):
+                stop_command = None
+            if machine_ok and machine is not None and stop_command != machine["hook_commands"]["stop"]:
+                checks["global_hooks"] = {
+                    "ok": False,
+                    "reason": "global hooks stop command does not match machine config",
+                    "path": str(hooks_path),
+                }
+            else:
+                checks["global_hooks"] = {"ok": True, "path": str(hooks_path)}
+
+        skill_path = self.paths.global_skill_path()
+        if not skill_path.is_file():
+            checks["global_skill"] = {"ok": False, "reason": f"missing skill at {skill_path}"}
+        else:
+            checks["global_skill"] = {"ok": True, "path": str(skill_path)}
+
+        if cwd is not None:
+            repo_root = self.paths.resolve_repo_root(cwd)
+            config_path = repo_root / ".codex" / "autoloop.project.json"
+            hooks_repo_path = repo_root / ".codex" / "hooks.json"
+            skill_repo_path = repo_root / ".agents" / "skills" / "autonomous-loop" / "SKILL.md"
+            if not config_path.is_file():
+                checks["repo_install"] = {
+                    "ok": False,
+                    "reason": f"missing .codex/autoloop.project.json at {config_path}",
+                    "repo_root": str(repo_root),
+                }
+            elif not hooks_repo_path.is_file():
+                checks["repo_install"] = {
+                    "ok": False,
+                    "reason": f"missing .codex/hooks.json at {hooks_repo_path}",
+                    "repo_root": str(repo_root),
+                }
+            elif not skill_repo_path.is_file():
+                checks["repo_install"] = {
+                    "ok": False,
+                    "reason": f"missing repo-local skill at {skill_repo_path}",
+                    "repo_root": str(repo_root),
+                }
+            else:
+                hooks_json = read_json(hooks_repo_path, None)
+                try:
+                    stop_command = hooks_json["hooks"]["Stop"][0]["hooks"][0]["command"] if hooks_json else None
+                except (KeyError, IndexError, TypeError):
+                    stop_command = None
+                if machine_ok and machine is not None and stop_command != machine["hook_commands"]["stop"]:
+                    checks["repo_install"] = {
+                        "ok": False,
+                        "reason": "repo hooks stop command does not match machine config",
+                        "repo_root": str(repo_root),
+                    }
+                else:
+                    checks["repo_install"] = {"ok": True, "repo_root": str(repo_root)}
+
+        ok = all(bool(item.get("ok")) for item in checks.values())
+        payload: dict[str, Any] = {"ok": ok, "checks": checks}
+        if cwd is not None:
+            payload["cwd"] = str(Path(cwd))
+        return payload
+
     def status(self, cwd: str | Path, session_id: str | None = None) -> dict[str, Any]:
         repo_root = self.paths.resolve_repo_root(cwd)
         repo_hash = hash_text(str(repo_root))
@@ -680,6 +823,25 @@ class AutonomousLoopRuntime:
         prefer_scripts: list[str] | None = None,
     ) -> dict[str, Any]:
         repo = self.paths.resolve_repo_root(repo_root)
+        machine = self.store.load_machine_config()
+        machine_ok, machine_error = validate_machine_config(machine)
+        if not machine_ok:
+            return {
+                "ok": False,
+                "error_code": "missing_machine_bootstrap",
+                "repo_root": str(repo),
+                "message": "Run `autonomous-loop bootstrap` before `install-repo`.",
+                "remediation": [
+                    "Run `autonomous-loop bootstrap`",
+                    f"Then rerun `autonomous-loop install-repo --repo {repo}`",
+                ],
+                "evidence": {
+                    "machine_config_path": str(self.paths.machine_config_path()),
+                    "reason": machine_error,
+                },
+            }
+        assert machine is not None
+
         try:
             prepared = inspect_repo(
                 repo,
@@ -702,7 +864,12 @@ class AutonomousLoopRuntime:
             )
         else:
             copied.append(config_path)
-        copied.extend(self.store.install_repo_templates(self.template_root, repo, force=force))
+        hooks_path = self.store.write_repo_hooks(repo, machine["hook_commands"], force=force)
+        if hooks_path is not None:
+            copied.append(hooks_path)
+        skill_path = self.store.install_repo_skill_template(self.template_root, repo, force=force)
+        if skill_path is not None:
+            copied.append(skill_path)
         return {
             "ok": True,
             "repo_root": str(repo),

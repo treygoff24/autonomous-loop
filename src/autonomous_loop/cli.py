@@ -49,6 +49,12 @@ def build_parser() -> argparse.ArgumentParser:
     install.add_argument("--package-manager")
     install.add_argument("--prefer-scripts", type=_csv_arg)
 
+    bootstrap = subparsers.add_parser("bootstrap")
+    bootstrap.add_argument("--force", action="store_true")
+
+    doctor = subparsers.add_parser("doctor")
+    doctor.add_argument("--cwd")
+
     status = subparsers.add_parser("status")
     status.add_argument("--cwd", required=True)
     status.add_argument("--session-id")
@@ -99,6 +105,16 @@ def main(argv: list[str] | None = None) -> int:
             package_manager=args.package_manager,
             prefer_scripts=args.prefer_scripts,
         )
+        emit_json(result)
+        return 1 if result.get("ok") is False else 0
+
+    if args.command == "bootstrap":
+        result = runtime.bootstrap(force=args.force)
+        emit_json(result)
+        return 1 if result.get("ok") is False else 0
+
+    if args.command == "doctor":
+        result = runtime.doctor(cwd=args.cwd)
         emit_json(result)
         return 1 if result.get("ok") is False else 0
 

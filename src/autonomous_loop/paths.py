@@ -41,6 +41,18 @@ class RuntimePaths:
         repo = self.resolve_repo_root(repo_root)
         return Namespace(repo_root=str(repo), repo_hash=hash_text(str(repo)), session_id=session_id)
 
+    def codex_home(self) -> Path:
+        return self.root.parent
+
+    def machine_config_path(self) -> Path:
+        return self.root / "machine.json"
+
+    def codex_home_hooks_path(self) -> Path:
+        return self.codex_home() / "hooks.json"
+
+    def global_skill_path(self) -> Path:
+        return self.codex_home() / "skills" / "autonomous-loop" / "SKILL.md"
+
     def repo_dir(self, repo_hash: str) -> Path:
         return self.root / "repos" / repo_hash
 
@@ -86,4 +98,3 @@ class RuntimePaths:
 
     def ensure_session(self, namespace: Namespace) -> None:
         self.session_dir(namespace).mkdir(parents=True, exist_ok=True)
-

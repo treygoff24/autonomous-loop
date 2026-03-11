@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import os
 import shutil
 import sys
 import unittest
@@ -13,10 +14,15 @@ if str(TESTS_ROOT) not in sys.path:
 from support import (
     PROJECT_ROOT,
     RuntimeAdapter,
+    build_cli_env,
+    install_fake_cli,
     load_installed_project_config,
     load_json,
+    make_codex_home,
     make_node_repo,
     make_temp_repo,
+    make_user_bin,
+    run_cli,
     run_install_repo_cli,
 )
 from autonomous_loop.gates import run_gate_profile
@@ -30,7 +36,37 @@ from autonomous_loop.install_repo import (
 class InstallRepoTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls) -> None:
+        cls._env_backup = {
+            "CODEX_HOME": os.environ.get("CODEX_HOME"),
+            "AUTONOMOUS_LOOP_HOME": os.environ.get("AUTONOMOUS_LOOP_HOME"),
+            "PATH": os.environ.get("PATH", ""),
+        }
+        cls._bootstrap_root = make_temp_repo(prefix="autonomous-loop-install-home-")
+        cls._codex_home = make_codex_home(cls._bootstrap_root)
+        cls._user_bin = make_user_bin(cls._bootstrap_root)
+        cls._fake_cli_path = install_fake_cli(cls._user_bin)
+        cls._cli_env = build_cli_env(codex_home=cls._codex_home, user_bin=cls._user_bin)
+
+        os.environ["CODEX_HOME"] = cls._cli_env["CODEX_HOME"]
+        os.environ["AUTONOMOUS_LOOP_HOME"] = cls._cli_env["AUTONOMOUS_LOOP_HOME"]
+        os.environ["PATH"] = cls._cli_env["PATH"]
+
+        bootstrap = run_cli(["bootstrap"], env=cls._cli_env)
+        if bootstrap.returncode != 0:
+            raise AssertionError(f"bootstrap failed in test setup: {bootstrap.stdout}\n{bootstrap.stderr}")
+
         cls.runtime = RuntimeAdapter()
+
+    @classmethod
+    def tearDownClass(cls) -> None:
+        shutil.rmtree(cls._bootstrap_root, ignore_errors=True)
+        for key in ("CODEX_HOME", "AUTONOMOUS_LOOP_HOME"):
+            original = cls._env_backup.get(key)
+            if original is None:
+                os.environ.pop(key, None)
+            else:
+                os.environ[key] = original
+        os.environ["PATH"] = cls._env_backup["PATH"]
 
     def setUp(self) -> None:
         self.temp_dir = make_temp_repo(prefix="autonomous-loop-install-")
@@ -185,12 +221,11 @@ class InstallRepoTests(unittest.TestCase):
         result_with_force = self.runtime.call("install_repo", repo_root=repo, force=True)
 
         self.assertTrue(result_with_force["ok"])
-        self.assertEqual(
-            hooks_path.read_text(encoding="utf-8"),
-            (PROJECT_ROOT / "src" / "autonomous_loop" / "resources" / "templates" / ".codex" / "hooks.json").read_text(
-                encoding="utf-8"
-            ),
-        )
+        rendered_hooks = load_json(hooks_path)
+        self.assertIsNotNone(rendered_hooks)
+        assert rendered_hooks is not None
+        stop_command = rendered_hooks["hooks"]["Stop"][0]["hooks"][0]["command"]
+        self.assertEqual(stop_command, f"{self._fake_cli_path} hook stop")
         self.assertEqual(
             skill_path.read_text(encoding="utf-8"),
             (

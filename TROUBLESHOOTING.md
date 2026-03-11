@@ -1,52 +1,106 @@
 # Autonomous Loop Troubleshooting
 
-## No Hook Activity At All
+Start here:
+
+```bash
+autonomous-loop doctor
+autonomous-loop doctor --cwd /path/to/repo
+```
+
+Every remediation path below maps back to a specific failed doctor check. Re-run the same `doctor` command after each fix.
+
+## `cli_on_path` Failed
+
+`doctor` could not find an executable `autonomous-loop` command on `PATH`.
 
 Check:
 
-1. your Codex config-layer `hooks.json` exists
-2. the commands in that file point at a working `autonomous-loop` install
-3. `autonomous-loop` is on `PATH` or the hook command uses a valid absolute path
-4. the hook file is in a config layer Codex actually loads
+1. the package install completed successfully
+2. the environment where you run Codex can resolve `autonomous-loop`
+3. the command on `PATH` is executable
 
-## Install-Repo Fails With Missing package.json
+If you are validating from source in this repo, the equivalent help check is:
 
-`install-repo` autodetect currently supports Node-style repos only.
+```bash
+python3 bin/autoloop_cli.py --help
+```
 
-Check:
+## `machine_config` Failed
 
-1. you pointed `--repo` at the actual repo root
-2. that root contains `package.json`
-3. for non-Node repos, you are prepared to write `.codex/autoloop.project.json` manually after installing hooks and the repo-local skill
-
-## Install-Repo Fails With Conflicting Lockfiles
-
-Autodetect uses this precedence:
-
-1. `--package-manager`
-2. `package.json.packageManager`
-3. lockfiles
-
-If lockfiles disagree and there is no stronger signal, `install-repo` fails closed.
+The machine bootstrap record at `$CODEX_HOME/autoloop/machine.json` is missing, malformed, points at a missing file, or points at a non-executable file.
 
 Fix:
 
-1. remove stale lockfiles
-2. add `packageManager` to `package.json`
-3. or rerun with `--package-manager <npm|pnpm|yarn|bun>`
+```bash
+autonomous-loop bootstrap
+autonomous-loop doctor
+```
 
-## Install-Repo Fails With Missing Verification Scripts
+If the command path on the machine changed, rerun `autonomous-loop bootstrap --force`.
 
-Autodetect only trusts these script names:
+## `global_hooks` Failed
 
-- `typecheck`
-- `lint`
-- `test`
+The machine-level `hooks.json` is missing or does not match the command path recorded in `machine.json`.
 
 Fix:
 
-1. add at least one of those scripts to `package.json`
-2. or rerun with `--prefer-scripts` using only those supported names that are already present
+```bash
+autonomous-loop bootstrap --force
+autonomous-loop doctor
+```
+
+If Codex was already running, restart it once after bootstrap.
+
+## `global_skill` Failed
+
+The machine-level skill file is missing from `$CODEX_HOME/skills/autonomous-loop/SKILL.md`.
+
+Fix:
+
+```bash
+autonomous-loop bootstrap --force
+autonomous-loop doctor
+```
+
+If Codex still does not notice the skill after bootstrap succeeds, restart Codex once.
+
+## `repo_install` Failed
+
+Run the repo-scoped check so the failure includes the resolved repo root:
+
+```bash
+autonomous-loop doctor --cwd /path/to/repo
+```
+
+Then match the failure reason:
+
+- missing `.codex/autoloop.project.json`: rerun `autonomous-loop install-repo --repo /path/to/repo`
+- missing `.codex/hooks.json`: rerun `autonomous-loop install-repo --repo /path/to/repo --force`
+- missing repo-local skill: rerun `autonomous-loop install-repo --repo /path/to/repo --force`
+- repo hooks stop command does not match machine config: rerun `autonomous-loop bootstrap --force`, then `autonomous-loop install-repo --repo /path/to/repo --force`
+
+Re-run:
+
+```bash
+autonomous-loop doctor --cwd /path/to/repo
+```
+
+## `install-repo` Fails Before Writing Files
+
+`install-repo` returns machine-readable JSON. Common failures:
+
+- `missing_machine_bootstrap`: run `autonomous-loop bootstrap`, then rerun `install-repo`
+- `missing_package_json`: target repo is not a supported Node-style repo root
+- `ambiguous_package_manager`: remove conflicting lockfiles or pass `--package-manager <npm|pnpm|yarn|bun>`
+- `missing_package_manager`: add `packageManager` to `package.json` or pass `--package-manager`
+- `missing_verification_scripts`: define at least one of `typecheck`, `lint`, or `test`
+- `invalid_preferred_script` or `missing_preferred_script`: fix the `--prefer-scripts` list
+
+After the install succeeds, validate with:
+
+```bash
+autonomous-loop doctor --cwd /path/to/repo
+```
 
 ## Enable Request Never Activates
 
@@ -55,7 +109,7 @@ There are two activation paths:
 1. direct-env activation when the Codex environment exposes `CODEX_THREAD_ID` or `CODEX_SESSION_ID`
 2. fallback claim-token activation through the next real `Stop` event
 
-If the response from `request enable` already includes `activation_mode: "direct-env"`, the loop should already be bound to the current session and this section does not apply.
+If the response from `request enable` includes `activation_mode: "direct-env"`, the loop is already bound to the current session and this section does not apply.
 
 In the fallback path, the stop hook only binds a pending request when the next real turn-ending `Stop` event sees the claim token in `last_assistant_message`.
 
@@ -79,7 +133,7 @@ Check:
 3. that turn actually ended and triggered a `Stop` hook
 4. the repo path in the request matches the current working repo
 
-Same-turn `status` checks are expected to show `pending` until that stop event happens. If your environment exposes `CODEX_THREAD_ID` or `CODEX_SESSION_ID` and you still see `pending`, direct-env binding is not happening and the runtime should be investigated.
+Same-turn `status` checks are expected to show `pending` until that stop event happens.
 
 ## Hook Fails Closed With Contract Hash Mismatch
 
@@ -89,11 +143,7 @@ This means at least one of these changed unexpectedly after activation:
 - `verification.json`
 - `state.json` contract hash field
 
-Fix:
-
-1. inspect the session directory under `$CODEX_HOME/autoloop/repos/<repo_hash>/sessions/<session_id>/`
-2. compare `contract.json` and `verification.json`
-3. if the contract really changed, disable or release the run and re-enable it
+Inspect the session directory under `$CODEX_HOME/autoloop/repos/<repo_hash>/sessions/<session_id>/`. If the contract really changed, disable or release the run and re-enable it.
 
 ## Final Gates Keep Blocking Release
 
@@ -131,18 +181,4 @@ Repo resolution prefers:
 2. nearest parent containing `.git`
 3. current working directory
 
-If Codex is running in a deep subdirectory and the wrong root is being chosen, put `.codex/autoloop.project.json` at the actual repo root.
-
-## Skill Exists But Codex Does Not Pick It Up
-
-Codex usually detects newly installed skills automatically, but a restart may still be needed after adding a brand new global skill directory under `$CODEX_HOME/skills/`.
-
-## No Runtime Files Under CODEX_HOME
-
-Default runtime root:
-
-```text
-$CODEX_HOME/autoloop
-```
-
-If that path is empty, check whether `AUTONOMOUS_LOOP_HOME` or `CODEX_HOME` was overridden in the shell that launched Codex.
+If `doctor --cwd /path/to/repo` reports the wrong `repo_root`, point it at the actual repo root or put `.codex/autoloop.project.json` at the correct root.
