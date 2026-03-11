@@ -1,6 +1,10 @@
 improved Ralph loop hook for Codex CLI v0.114.0+. keep your Codex agents from exiting and stopping before the implementation plan is completed. Hardened against agent tampering to cheat/manipulate early exits.
 
-Most agent loops have the same weakness: they can sound finished before the work is actually done. The tests may not have run. The important files may not exist. The agent may simply decide it is time to hand control back and hope nobody notices. This project closes that gap.
+While the GPT model family is great, it's fatal flaw is early exits. you tell Codex to implement the whole plan without stopping, it does phase 1, stops, reports progress, meaning you have to babysit it, taxing your cognitive RAM in the process.
+
+They'll also report things as done that simply are not done.
+
+`autonomous-loop` fixes that. point your agent here to have your agent explain it to you and install it locally for you: agent-implementation-brief.md
 
 `autonomous-loop` gives Codex a stricter definition of done. You turn it on for one repo and one session. From that point on, the stop hook checks a frozen contract, looks at the real repo state, runs the trusted gate commands you chose in repo config, and blocks exit until those checks pass. If something looks corrupted or suspicious, it fails closed instead of trusting the model.
 
@@ -10,7 +14,7 @@ If you do not care about the internal mechanics, the short version is simple. In
 
 Without a controller like this, an agent can cheat in soft ways that are hard to catch in the moment. It can claim success early. It can skip the hard gates. It can rewrite the story of what happened after the fact. None of that requires malicious intent. It is just the natural failure mode of a system that is rewarded for sounding complete.
 
-This project moves the definition of success out of the model’s self-report and into a separate runtime. The model can help draft the contract, but it does not get to declare that contract satisfied. The model can run commands, but it does not get to invent the commands that judge it. That separation is the whole point.
+This project moves the definition of success out of the model’s self-report and into a separate runtime. The model can help draft the contract, but it does not get to declare that contract satisfied. The model can run commands, but it does not get to invent the commands that judge it. That separation keeps smarter but still lazy models like GPT 5.4 from simply breaking the enforcement mechanisms instead of finishing the task at hand.
 
 ## What it actually does
 
@@ -22,7 +26,7 @@ There is one awkward part in the current Codex hook model: normal in-session too
 
 ## What this feels like in practice
 
-You work normally until you are ready to hand the task to the agent in a serious way. Then you enable the loop. At that point, the agent cannot casually “wrap up” just because it thinks the coding part feels done. The contract still has to be satisfied. The evidence still has to line up. The gates still have to pass. If they do not, the hook sends the agent back into the loop with a narrow reason.
+You work normally until you are ready to hand the task to the agent in a serious way. Then you enable the loop with the /autonomous-loop skill. At that point, the agent cannot casually “wrap up” just because it thinks the coding part feels done. The contract still has to be satisfied. The evidence still has to line up. The gates still have to pass. If they do not, the hook sends the agent back into the loop with a narrow reason.
 
 That is the practical value here. It reduces the number of fake finishes, half-finished implementations, and “trust me, it works” exits you need to babysit.
 
@@ -62,7 +66,7 @@ If you want the operational details, start here:
 - [`docs/agent-implementation-brief.md`](docs/agent-implementation-brief.md)
 - [`TROUBLESHOOTING.md`](TROUBLESHOOTING.md)
 
-If you want the short version for a coding agent, hand it [`docs/agent-implementation-brief.md`](docs/agent-implementation-brief.md). That file is written as a direct system brief, not marketing copy.
+If you want the short version for a coding agent, hand it [`agent-implementation-brief.md`](docs/agent-implementation-brief.md). That file is written as a direct system brief, not marketing copy.
 
 ## Current hook assumptions
 
