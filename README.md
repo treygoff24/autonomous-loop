@@ -1,6 +1,6 @@
 # Autonomous Loop
 
-`autonomous-loop` is a Codex hook runtime that keeps a task open until deterministic evidence and trusted repo-defined gates say it is done.
+`autonomous-loop` is ralph loop but improved and ported to Codex. stop the early outs, force Codex to work until it's actually done and passes quality gates.
 
 ## Quickstart
 
