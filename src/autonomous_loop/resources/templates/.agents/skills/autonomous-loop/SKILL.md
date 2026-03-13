@@ -1,65 +1,60 @@
 ---
 name: autonomous-loop
-description: "Control the repo-local autonomous-loop for this repository: enable, status, pause, resume, disable, and release."
+description: "Autonomous persistence layer — keeps you implementing until the task genuinely passes all verification gates. You are the builder; the loop is the safety net."
 ---
 
-# Repo-local autonomous-loop
+# autonomous-loop
 
-Machine bootstrap must already be complete before this repo-local skill is usable. If onboarding is incomplete, stop and tell the user to run:
+## What this is
 
-```bash
-autonomous-loop bootstrap
-autonomous-loop install-repo --repo /path/to/repo
-autonomous-loop doctor --cwd /path/to/repo
-```
+autonomous-loop is infrastructure that runs in the background via Codex hooks. It exists for one reason: **to stop you from exiting before your work is actually done.**
 
-Read these files first:
+You are the implementation agent. Your job is to write code, fix bugs, run tests, and ship the task the user gave you. autonomous-loop is not the task — it is a controller that watches your stop events and blocks premature exit when verification gates (typecheck, lint, test) still fail or required files are still missing.
 
-- `.codex/autoloop.project.json`
-- `.agents/skills/autonomous-loop/SKILL.md`
+**You do not need to manage, operate, or think about the loop.** It manages you. Focus entirely on the implementation work.
 
-Use the shared `autonomous-loop` CLI as the runtime. Mutable state lives under `CODEX_HOME`, not in this repo.
+## When the user says "use autonomous-loop" or "/autonomous-loop"
 
-The repo-local hooks in `.codex/hooks.json` were generated from the machine's verified bootstrap command path. If `autonomous-loop doctor --cwd "$PWD"` fails, stop and report the failing checks instead of guessing.
+This means: **enable the loop, then immediately start implementing the task.**
 
-## Enable
+### Step 1: Enable the loop (fast, mechanical — spend no time here)
 
-When the user asks to enable the loop:
-
-1. Synthesize a compact deterministic contract for the current agreed task.
-2. Run:
+Read `.codex/autoloop.project.json` to understand what verification commands exist, then run:
 
 ```bash
-autonomous-loop request enable --cwd "$PWD" --objective "<objective>" --task-json '<task-json>'
+autonomous-loop request enable --cwd "$PWD" \
+  --objective "<one-line summary of the user's task>" \
+  --task-json '{"id":"T1","title":"<task title>","required":true,"evidence":[{"kind":"pathChanged","glob":"src/**"}]}'
 ```
 
-3. Inspect the response:
-   - if it includes `activation_mode: "direct-env"`, the loop is already bound to the current Codex thread
-   - otherwise read the returned `claim_token`
-4. In the fallback path, include that exact token in your next assistant message so the next `Stop` hook can bind the request to the live Codex session.
+Keep the contract minimal. One or two tasks with simple evidence. Do not over-engineer the contract — it is not the deliverable.
 
-## Status
+If the response includes `activation_mode: "direct-env"`, you're set. If it returns a `claim_token`, include that exact token text in your next message, then move on.
 
-Run:
+### Step 2: Do the actual work
 
-```bash
-autonomous-loop status --cwd "$PWD"
-```
+This is the part that matters. Implement the task. Write the code. Run the tests. Fix what breaks. Keep going until everything passes.
 
-## Pause, Resume, Disable, Release
+The loop runs in the background. If you try to stop and your gates are still red, the stop hook will block you and tell you what's still failing. Read that feedback, fix the issues, and continue.
 
-Queue the matching request:
+### Step 3: You're done when the loop releases you
 
-```bash
-autonomous-loop request <pause|resume|disable|release> --cwd "$PWD"
-```
+You do not decide when you're done. The verification gates decide. When all required evidence is satisfied and all gate commands pass, the loop releases automatically. Until then, keep working.
 
-If the response includes `activation_mode: "direct-env"`, the change is already bound to the current Codex thread. Otherwise include the returned claim token in your next assistant message.
+## Other commands (only if the user asks)
 
-## Hard Rules
+- **Status:** `autonomous-loop status --cwd "$PWD"`
+- **Pause:** `autonomous-loop request pause --cwd "$PWD"`
+- **Resume:** `autonomous-loop request resume --cwd "$PWD"`
+- **Disable:** `autonomous-loop request disable --cwd "$PWD"`
 
-- Do not claim the loop is active until direct-env activation is confirmed or a `Stop` hook has actually claimed the request.
-- A direct-env enable response is already active and does not need a claim token.
-- Do not invent verification commands outside `.codex/autoloop.project.json`.
-- Do not continue past a failing `autonomous-loop doctor --cwd "$PWD"` check without telling the user exactly what failed.
-- Do not say work is complete just because the model thinks it is done.
+These are user-facing controls. Do not run them on your own initiative.
+
+## Rules
+
+- **Do not confuse enabling the loop with doing the task.** Enabling is one CLI call. The task is everything after that.
+- **Do not spend time crafting elaborate contracts.** A simple objective and basic evidence is enough. The gates (typecheck/lint/test) are what actually verify completion.
+- **Do not invent verification commands.** The trusted commands live in `.codex/autoloop.project.json`. You cannot add to them.
+- **Do not claim work is complete because you think it is.** The gates decide.
+- **If `autonomous-loop doctor --cwd "$PWD"` fails, stop and tell the user.** Do not guess your way past setup problems.
+- **If the stop hook blocks you, read its output carefully.** It tells you exactly what failed. Fix that, not something else.
