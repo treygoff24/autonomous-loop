@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## 0.1.1 - 2026-03-24
+
 - Added machine bootstrap with `autonomous-loop bootstrap`, which writes the global hooks file, global skill, and machine config under `CODEX_HOME`
 - Added `autonomous-loop doctor` for machine-level and repo-level validation, with non-zero exit on failed checks
 - `install-repo` now requires successful machine bootstrap and renders repo-local hooks from the verified machine command path
@@ -14,6 +16,7 @@
 - Added archive-first runtime cleanup with `autonomous-loop cleanup`, automatic repo cleanup on `SessionStart`, and archived session/request bookkeeping under the runtime root
 - Added session heartbeat tracking, freshness-based active-session selection, and direct-enable stale sibling cleanup to reduce multi-session drift
 - Added non-failing `runtime_hygiene` doctor reporting plus richer `status` output with hygiene summaries and archived artifact counts
+- Added an agent-first installation and troubleshooting guide in `AGENT_BUILD_GUIDE.md`
 
 ## 0.1.0
 

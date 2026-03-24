@@ -1,5 +1,7 @@
 # Install
 
+If you are handing this setup to an agent, point it at [`../AGENT_BUILD_GUIDE.md`](../AGENT_BUILD_GUIDE.md) first. That guide is optimized for agent execution and repair.
+
 First-time setup is a two-step flow:
 
 1. bootstrap the machine

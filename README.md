@@ -2,6 +2,8 @@
 
 `autonomous-loop` is ralph loop but improved and ported to Codex. stop the early outs, force Codex to work until it's actually done and passes quality gates.
 
+If you are using an agent to install or operate this, point it at [`AGENT_BUILD_GUIDE.md`](AGENT_BUILD_GUIDE.md) first. That file is the shortest path from zero to working setup, plus the fastest troubleshooting path when something feels off.
+
 ## Quickstart
 
 1. Install the package:
@@ -192,6 +194,7 @@ Current `install-repo` autodetect scope is Node-style repos with `package.json`.
 
 ## Read Next
 
+- [`AGENT_BUILD_GUIDE.md`](AGENT_BUILD_GUIDE.md)
 - [`docs/install.md`](docs/install.md)
 - [`docs/examples.md`](docs/examples.md)
 - [`TROUBLESHOOTING.md`](TROUBLESHOOTING.md)

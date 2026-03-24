@@ -1,5 +1,7 @@
 # Autonomous Loop Troubleshooting
 
+If an agent is doing the install or repair work, start with [`AGENT_BUILD_GUIDE.md`](AGENT_BUILD_GUIDE.md). It gives the shortest reliable setup path and tells the agent what order to run the checks in.
+
 Start here:
 
 ```bash
@@ -8,6 +10,12 @@ autonomous-loop doctor --cwd /path/to/repo
 ```
 
 Every remediation path below maps back to a specific failed doctor check. Re-run the same `doctor` command after each fix.
+
+`runtime_hygiene` warnings are different. They do not mean the install is broken. They mean old runtime state has accumulated and should be cleaned with:
+
+```bash
+autonomous-loop cleanup --cwd /path/to/repo
+```
 
 ## `cli_on_path` Failed
 
