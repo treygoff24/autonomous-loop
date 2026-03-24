@@ -1,14 +1,23 @@
 from __future__ import annotations
 
 import json
+import os
 import shutil
 import sys
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 TESTS_ROOT = Path(__file__).resolve().parent
 if str(TESTS_ROOT) not in sys.path:
     sys.path.insert(0, str(TESTS_ROOT))
+
+SRC_ROOT = TESTS_ROOT.parent / "src"
+if str(SRC_ROOT) not in sys.path:
+    sys.path.insert(0, str(SRC_ROOT))
+
+from autonomous_loop.controller import AutonomousLoopRuntime
+from autonomous_loop.storage import atomic_write_json, read_json
 
 from support import (
     build_cli_env,
@@ -91,6 +100,29 @@ class DoctorTests(unittest.TestCase):
         self.assertFalse(payload["checks"]["global_hooks"]["ok"])
         self.assertIn("stop command does not match", payload["checks"]["global_hooks"]["reason"])
 
+    def test_cli_on_path_must_match_machine_bootstrap_command(self) -> None:
+        self._bootstrap()
+
+        stale_bin = self.temp_dir / "stale-bin"
+        stale_bin.mkdir(parents=True, exist_ok=True)
+        stale_cli = stale_bin / "autonomous-loop"
+        stale_cli.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
+        stale_cli.chmod(0o755)
+
+        env = dict(self.env)
+        env["PATH"] = f"{stale_bin}:{self.env['PATH']}"
+
+        completed = run_cli(["doctor"], env=env)
+
+        self.assertEqual(completed.returncode, 1)
+        payload = json.loads(completed.stdout)
+        self.assertFalse(payload["ok"])
+        check = payload["checks"]["cli_on_path"]
+        self.assertFalse(check["ok"])
+        self.assertIn("does not match", check["reason"])
+        self.assertEqual(check["path"], str(stale_cli))
+        self.assertEqual(check["expected_path"], str(self.fake_cli_path))
+
     def test_with_cwd_missing_repo_install_reports_repo_install_check_failed(self) -> None:
         self._bootstrap()
         repo = make_node_repo(
@@ -156,6 +188,37 @@ class DoctorTests(unittest.TestCase):
         payload = json.loads(completed.stdout)
         self.assertTrue(payload["ok"])
         self.assertTrue(payload["checks"]["repo_install"]["ok"])
+
+    def test_doctor_reports_runtime_hygiene_warnings_without_failing(self) -> None:
+        self._bootstrap()
+        repo = make_node_repo(
+            self.temp_dir / "repo",
+            package_manager="npm@10.9.0",
+            scripts={"typecheck": "tsc --noEmit", "lint": "eslint .", "test": "vitest run"},
+            lockfiles=("package-lock.json",),
+        )
+        install = run_cli(["install-repo", "--repo", str(repo)], env=self.env)
+        self.assertEqual(install.returncode, 0, f"install-repo failed: {install.stdout}\n{install.stderr}")
+
+        runtime = AutonomousLoopRuntime(root=self.runtime_root)
+        with patch.dict(os.environ, {"CODEX_THREAD_ID": "stale-session"}, clear=False):
+            runtime.request_enable(cwd=repo, objective="Doctor hygiene warning")
+
+        state_path = runtime.paths.session_dir(runtime.paths.namespace(repo, "stale-session")) / "state.json"
+        state_payload = read_json(state_path, {})
+        state_payload["heartbeat_at"] = "2026-03-20T00:00:00+00:00"
+        state_payload["updated_at"] = "2026-03-20T00:00:00+00:00"
+        atomic_write_json(state_path, state_payload)
+
+        completed = run_cli(["doctor", "--cwd", str(repo)], env=self.env)
+
+        self.assertEqual(completed.returncode, 0)
+        payload = json.loads(completed.stdout)
+        self.assertTrue(payload["ok"])
+        hygiene = payload["checks"]["runtime_hygiene"]
+        self.assertTrue(hygiene["ok"])
+        self.assertGreaterEqual(hygiene["warning_count"], 1)
+        self.assertIn("stale active session", " ".join(hygiene["warnings"]))
 
 
 if __name__ == "__main__":

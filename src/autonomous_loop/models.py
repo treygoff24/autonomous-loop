@@ -78,6 +78,7 @@ class RuntimeState:
     contract_hash: str
     created_at: str
     updated_at: str
+    heartbeat_at: str | None = None
     iteration: int = 0
     repeated_failure_count: int = 0
     last_failure_signature: str | None = None
@@ -105,6 +106,7 @@ class RuntimeState:
             "contract_hash": self.contract_hash,
             "created_at": self.created_at,
             "updated_at": self.updated_at,
+            "heartbeat_at": self.heartbeat_at,
             "iteration": self.iteration,
             "repeated_failure_count": self.repeated_failure_count,
             "last_failure_signature": self.last_failure_signature,
@@ -134,6 +136,7 @@ class RuntimeState:
             contract_hash=str(payload["contract_hash"]),
             created_at=str(payload["created_at"]),
             updated_at=str(payload["updated_at"]),
+            heartbeat_at=payload.get("heartbeat_at"),
             iteration=int(payload.get("iteration", 0)),
             repeated_failure_count=int(payload.get("repeated_failure_count", 0)),
             last_failure_signature=payload.get("last_failure_signature"),

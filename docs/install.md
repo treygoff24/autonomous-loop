@@ -43,7 +43,7 @@ Expected result: `ok: true`.
 
 `doctor` runs the following checks and reports each as a field in the JSON output:
 
-- `cli_on_path` — verifies `autonomous-loop` is discoverable on `PATH`
+- `cli_on_path` — verifies `autonomous-loop` is discoverable on `PATH` and resolves to the same launcher recorded in machine bootstrap
 - `machine_config` — validates `$CODEX_HOME/autoloop/machine.json` exists and that `command_path` is absolute, exists, and is executable
 - `global_hooks` — verifies `$CODEX_HOME/hooks.json` exists and that the stop command matches the machine config
 - `global_skill` — verifies `$CODEX_HOME/skills/autonomous-loop/SKILL.md` exists
@@ -51,8 +51,13 @@ Expected result: `ok: true`.
 When invoked with `--cwd`, an additional check is included:
 
 - `repo_install` — verifies repo-local config, hooks, and skill are present, and that the repo hooks match the machine config
+- `runtime_hygiene` — reports stale live sessions, old paused or inactive sessions, and old pending or historical requests without failing the install
 
 If Codex was already running, restart it once after bootstrap so it reloads the global hooks and skill.
+
+If `cli_on_path` fails with a mismatch, you likely still have an older `autonomous-loop` launcher earlier on `PATH` than the one machine bootstrap pinned into hooks. Fix that mismatch first. Otherwise repo skills may invoke one runtime while hooks execute another.
+
+When `runtime_hygiene` reports warnings, the repo is still installable. The warning means runtime state has accumulated and should be cleaned or allowed to auto-clean on the next real session start.
 
 ## Repo Setup
 
@@ -145,6 +150,22 @@ autonomous-loop status --cwd <path> [--session-id <id>]
 
 - `--cwd` (required) — repo working directory
 - `--session-id` (optional) — inspect a specific session instead of the active one
+
+`status` also reports archived artifact counts plus a hygiene summary for the repo runtime root.
+
+### `cleanup`
+
+```
+autonomous-loop cleanup --cwd <path> [--stale-hours <n>] [--retention-hours <n>]
+```
+
+- `--cwd` (required) — repo working directory
+- `--stale-hours` (optional, default `8`) — archive active sessions and unclaimed pending requests older than this threshold
+- `--retention-hours` (optional, default `24`) — archive old paused sessions, inactive sessions, and historical applied requests older than this threshold
+
+`cleanup` archives old runtime artifacts out of the live `sessions/` and `pending-requests/` directories instead of deleting them. That keeps `status` focused on live state while preserving an audit trail under the repo runtime root.
+
+The runtime also performs the same cleanup automatically on real `SessionStart` events for the current repo. That automatic path preserves the current session, refreshes its heartbeat, archives stale active siblings, and trims aged requests.
 
 ## Smoke Test
 

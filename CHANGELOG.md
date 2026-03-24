@@ -11,6 +11,9 @@
 - `install-repo` trusts only the supported verification scripts `typecheck`, `lint`, and `test`, generates explicit trusted command argv arrays, and fails closed on unsafe installs
 - Added direct session binding for `request enable` when `CODEX_SESSION_ID` or `CODEX_THREAD_ID` is available, with fallback claim-token activation when no live session identifier is exposed
 - Added direct-env handling for follow-up actions when the target session already has loop state
+- Added archive-first runtime cleanup with `autonomous-loop cleanup`, automatic repo cleanup on `SessionStart`, and archived session/request bookkeeping under the runtime root
+- Added session heartbeat tracking, freshness-based active-session selection, and direct-enable stale sibling cleanup to reduce multi-session drift
+- Added non-failing `runtime_hygiene` doctor reporting plus richer `status` output with hygiene summaries and archived artifact counts
 
 ## 0.1.0
 

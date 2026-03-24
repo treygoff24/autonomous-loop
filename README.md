@@ -76,6 +76,13 @@ At each real `Stop` hook, the runtime:
 
 If the contract hash changes unexpectedly, required runtime files are unreadable, or the same blocker repeats too many times, the runtime fails closed.
 
+At each real `SessionStart` hook, the runtime now:
+
+1. cleans stale runtime artifacts for the current repo
+2. preserves the live current session
+3. refreshes that session's heartbeat
+4. injects continuity context only after hygiene has been applied
+
 ## CLI Reference
 
 ### `request enable`
@@ -114,6 +121,20 @@ autonomous-loop status --cwd <path> [--session-id <id>]
 - `--cwd` (required) — repo working directory
 - `--session-id` (optional) — inspect a specific session instead of the active one
 
+`status` includes a repo hygiene summary and archived artifact counts so stale state is visible without reading the runtime directories directly.
+
+### `cleanup`
+
+```
+autonomous-loop cleanup --cwd <path> [--stale-hours <n>] [--retention-hours <n>]
+```
+
+- `--cwd` (required) — repo working directory
+- `--stale-hours` (optional, default `8`) — archive stale active sessions and unclaimed pending requests older than this threshold
+- `--retention-hours` (optional, default `24`) — archive old paused sessions, inactive sessions, and historical applied requests older than this threshold
+
+`cleanup` is archive-first rather than delete-first. It moves old artifacts out of the live runtime directories and keeps them under archived folders for later inspection.
+
 ## Activation Model
 
 There are two request paths.
@@ -127,6 +148,8 @@ If the Codex environment exposes `CODEX_SESSION_ID` or `CODEX_THREAD_ID`, `auton
 - `session_id_source`
 
 For follow-up actions, `request pause`, `request resume`, `request disable`, and `request release` use the same immediate path only when that session already has loop state.
+
+When a direct-env enable happens, the runtime also archives stale sibling live sessions for that repo before activating the new one. Explicitly paused sessions are retained until the longer retention window expires.
 
 ### Fallback claim-token activation
 

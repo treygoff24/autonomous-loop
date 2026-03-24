@@ -62,11 +62,17 @@ class RuntimePaths:
     def pending_requests_dir(self, repo_hash: str) -> Path:
         return self.repo_dir(repo_hash) / "pending-requests"
 
+    def archived_requests_dir(self, repo_hash: str) -> Path:
+        return self.repo_dir(repo_hash) / "archived-requests"
+
     def pending_request_path(self, repo_hash: str, request_id: str) -> Path:
         return self.pending_requests_dir(repo_hash) / f"{safe_name(request_id)}.json"
 
     def sessions_dir(self, repo_hash: str) -> Path:
         return self.repo_dir(repo_hash) / "sessions"
+
+    def archived_sessions_dir(self, repo_hash: str) -> Path:
+        return self.repo_dir(repo_hash) / "archived-sessions"
 
     def session_dir(self, namespace: Namespace) -> Path:
         return self.sessions_dir(namespace.repo_hash) / safe_name(namespace.session_id)
@@ -94,7 +100,9 @@ class RuntimePaths:
 
     def ensure_repo(self, repo_hash: str) -> None:
         self.pending_requests_dir(repo_hash).mkdir(parents=True, exist_ok=True)
+        self.archived_requests_dir(repo_hash).mkdir(parents=True, exist_ok=True)
         self.sessions_dir(repo_hash).mkdir(parents=True, exist_ok=True)
+        self.archived_sessions_dir(repo_hash).mkdir(parents=True, exist_ok=True)
 
     def ensure_session(self, namespace: Namespace) -> None:
         self.session_dir(namespace).mkdir(parents=True, exist_ok=True)

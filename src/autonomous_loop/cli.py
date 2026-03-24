@@ -6,7 +6,7 @@ import sys
 from pathlib import Path
 from typing import Any
 
-from .controller import AutonomousLoopRuntime
+from .controller import AutonomousLoopRuntime, DEFAULT_RETENTION_HOURS, DEFAULT_STALE_HOURS
 from .hooks import parse_hook_input
 
 
@@ -48,6 +48,11 @@ def build_parser() -> argparse.ArgumentParser:
     install.add_argument("--force", action="store_true")
     install.add_argument("--package-manager")
     install.add_argument("--prefer-scripts", type=_csv_arg)
+
+    cleanup = subparsers.add_parser("cleanup")
+    cleanup.add_argument("--cwd", required=True)
+    cleanup.add_argument("--stale-hours", type=int, default=DEFAULT_STALE_HOURS)
+    cleanup.add_argument("--retention-hours", type=int, default=DEFAULT_RETENTION_HOURS)
 
     bootstrap = subparsers.add_parser("bootstrap")
     bootstrap.add_argument("--force", action="store_true")
@@ -104,6 +109,15 @@ def main(argv: list[str] | None = None) -> int:
             force=args.force,
             package_manager=args.package_manager,
             prefer_scripts=args.prefer_scripts,
+        )
+        emit_json(result)
+        return 1 if result.get("ok") is False else 0
+
+    if args.command == "cleanup":
+        result = runtime.cleanup(
+            cwd=args.cwd,
+            stale_hours=args.stale_hours,
+            retention_hours=args.retention_hours,
         )
         emit_json(result)
         return 1 if result.get("ok") is False else 0

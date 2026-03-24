@@ -2,7 +2,9 @@ from __future__ import annotations
 
 import os
 import secrets
+import shutil
 from copy import deepcopy
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
 
@@ -15,7 +17,10 @@ from .locks import file_lock
 from .logging_utils import build_file_logger
 from .models import Namespace, PendingRequest, RuntimeState, utc_now
 from .paths import RuntimePaths, hash_text
-from .storage import RuntimeStore, read_json
+from .storage import RuntimeStore, atomic_write_json, read_json
+
+DEFAULT_STALE_HOURS = 8
+DEFAULT_RETENTION_HOURS = 24
 
 
 def _check_hooks_match(hooks_json: Any, machine_config: dict[str, Any]) -> tuple[bool, str | None]:
@@ -27,6 +32,51 @@ def _check_hooks_match(hooks_json: Any, machine_config: dict[str, Any]) -> tuple
     if stop_command != machine_config["hook_commands"]["stop"]:
         return False, "stop command does not match machine config"
     return True, None
+
+
+def _paths_equivalent(left: str | Path, right: str | Path) -> bool:
+    try:
+        return Path(left).expanduser().resolve() == Path(right).expanduser().resolve()
+    except OSError:
+        return False
+
+
+def _parse_utc_timestamp(value: str | None) -> datetime | None:
+    if not value:
+        return None
+    try:
+        parsed = datetime.fromisoformat(value)
+    except ValueError:
+        return None
+    if parsed.tzinfo is None:
+        return parsed.replace(tzinfo=timezone.utc)
+    return parsed.astimezone(timezone.utc)
+
+
+def _timestamp_older_than(value: str | None, cutoff: datetime) -> bool:
+    parsed = _parse_utc_timestamp(value)
+    if parsed is None:
+        return False
+    return parsed <= cutoff
+
+
+def _archive_move(source: Path, destination: Path) -> Path:
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    if not destination.exists():
+        shutil.move(str(source), str(destination))
+        return destination
+
+    counter = 1
+    while True:
+        candidate = destination.with_name(f"{destination.name}-{counter}")
+        if not candidate.exists():
+            shutil.move(str(source), str(candidate))
+            return candidate
+        counter += 1
+
+
+def _state_activity_timestamp(state: RuntimeState) -> str:
+    return state.heartbeat_at or state.updated_at or state.created_at
 
 
 def _default_limits(project_config: dict[str, Any]) -> dict[str, int]:
@@ -199,6 +249,203 @@ class AutonomousLoopRuntime:
     def _logger(self, namespace: Namespace):
         return build_file_logger(f"autonomous_loop.{namespace.key}", self.paths.debug_log_path(namespace))
 
+    def _touch_state(self, namespace: Namespace, state: RuntimeState, *, timestamp: str | None = None, event_type: str | None = None) -> str:
+        now = timestamp or utc_now()
+        state.updated_at = now
+        state.heartbeat_at = now
+        self.store.save_state(namespace, state)
+        if event_type is not None:
+            self.store.append_event(namespace, {"timestamp": now, "type": event_type})
+        return now
+
+    def _inspect_runtime_hygiene(
+        self,
+        repo_root: Path,
+        *,
+        stale_hours: int,
+        retention_hours: int,
+        preserve_session_id: str | None = None,
+    ) -> dict[str, Any]:
+        repo_hash = hash_text(str(repo_root))
+        self.paths.ensure_repo(repo_hash)
+        now = datetime.now(timezone.utc)
+        stale_cutoff = now - timedelta(hours=stale_hours)
+        retention_cutoff = now - timedelta(hours=retention_hours)
+
+        stale_active_sessions: list[dict[str, Any]] = []
+        stale_paused_sessions: list[dict[str, Any]] = []
+        stale_inactive_sessions: list[dict[str, Any]] = []
+        stale_pending_requests: list[dict[str, Any]] = []
+        stale_historical_requests: list[dict[str, Any]] = []
+
+        sessions_dir = self.paths.sessions_dir(repo_hash)
+        for session_path in sorted(sessions_dir.iterdir()) if sessions_dir.exists() else []:
+            namespace = Namespace(repo_root=str(repo_root), repo_hash=repo_hash, session_id=session_path.name)
+            state = self.store.load_state(namespace)
+            if state is None:
+                continue
+            if preserve_session_id and state.session_id == preserve_session_id:
+                continue
+            activity_timestamp = _state_activity_timestamp(state)
+            session_info = {
+                "session_id": state.session_id,
+                "state": state.state,
+                "activity_at": activity_timestamp,
+                "objective": state.objective,
+            }
+            if state.active and _timestamp_older_than(activity_timestamp, stale_cutoff):
+                stale_active_sessions.append(session_info)
+            elif state.paused and _timestamp_older_than(activity_timestamp, retention_cutoff):
+                stale_paused_sessions.append(session_info)
+            elif not state.active and not state.paused and _timestamp_older_than(activity_timestamp, retention_cutoff):
+                stale_inactive_sessions.append(session_info)
+
+        requests_dir = self.paths.pending_requests_dir(repo_hash)
+        for request_path in sorted(requests_dir.glob("*.json")) if requests_dir.exists() else []:
+            payload = read_json(request_path, None)
+            if not isinstance(payload, dict):
+                continue
+            request = PendingRequest.from_dict(payload)
+            request_info = {
+                "request_id": request.request_id,
+                "action": request.action,
+                "status": request.status,
+                "created_at": request.created_at,
+            }
+            archive_timestamp = request.applied_at or request.claimed_at or request.created_at
+            if request.status == "pending" and _timestamp_older_than(request.created_at, stale_cutoff):
+                stale_pending_requests.append(request_info)
+            elif request.status != "pending" and _timestamp_older_than(archive_timestamp, retention_cutoff):
+                stale_historical_requests.append(request_info)
+
+        warnings: list[str] = []
+        if stale_active_sessions:
+            warnings.append(f"{len(stale_active_sessions)} stale active session(s) older than {stale_hours}h")
+        if stale_paused_sessions:
+            warnings.append(f"{len(stale_paused_sessions)} paused session(s) older than {retention_hours}h")
+        if stale_inactive_sessions:
+            warnings.append(f"{len(stale_inactive_sessions)} inactive session(s) older than {retention_hours}h")
+        if stale_pending_requests:
+            warnings.append(f"{len(stale_pending_requests)} unclaimed request(s) older than {stale_hours}h")
+        if stale_historical_requests:
+            warnings.append(f"{len(stale_historical_requests)} historical request(s) older than {retention_hours}h")
+
+        return {
+            "repo_root": str(repo_root),
+            "stale_hours": stale_hours,
+            "retention_hours": retention_hours,
+            "warning_count": len(warnings),
+            "warnings": warnings,
+            "stale_active_sessions": stale_active_sessions,
+            "stale_paused_sessions": stale_paused_sessions,
+            "stale_inactive_sessions": stale_inactive_sessions,
+            "stale_pending_requests": stale_pending_requests,
+            "stale_historical_requests": stale_historical_requests,
+        }
+
+    def _cleanup_repo(
+        self,
+        repo_root: Path,
+        *,
+        stale_hours: int,
+        retention_hours: int,
+        preserve_session_id: str | None = None,
+    ) -> dict[str, Any]:
+        hygiene = self._inspect_runtime_hygiene(
+            repo_root,
+            stale_hours=stale_hours,
+            retention_hours=retention_hours,
+            preserve_session_id=preserve_session_id,
+        )
+        repo_hash = hash_text(str(repo_root))
+        archived_sessions: list[dict[str, Any]] = []
+        archived_requests: list[dict[str, Any]] = []
+
+        for session_info in hygiene["stale_active_sessions"] + hygiene["stale_paused_sessions"] + hygiene["stale_inactive_sessions"]:
+            namespace = Namespace(repo_root=str(repo_root), repo_hash=repo_hash, session_id=session_info["session_id"])
+            session_path = self.paths.session_dir(namespace)
+            state = self.store.load_state(namespace)
+            if state is None or not session_path.exists():
+                continue
+            if preserve_session_id and state.session_id == preserve_session_id:
+                continue
+
+            reason = ""
+            if state.active:
+                reason = f"stale active session older than {stale_hours}h"
+            elif state.paused:
+                reason = f"paused session older than {retention_hours}h"
+            else:
+                reason = f"inactive session older than {retention_hours}h"
+
+            previous_state = state.state
+            with file_lock(self.paths.lock_path(namespace)):
+                state = self.store.load_state(namespace)
+                if state is None:
+                    continue
+                if preserve_session_id and state.session_id == preserve_session_id:
+                    continue
+                previous_state = state.state
+                if state.active or state.paused:
+                    state.state = "stale"
+                    state.active = False
+                    state.paused = False
+                    state.last_block_reason = reason
+                    self._touch_state(namespace, state, event_type="cleanup-archived")
+
+            archived_to = _archive_move(session_path, self.paths.archived_sessions_dir(repo_hash) / session_path.name)
+            archived_sessions.append(
+                {
+                    "session_id": namespace.session_id,
+                    "previous_state": previous_state,
+                    "archived_to": str(archived_to),
+                    "reason": reason,
+                }
+            )
+
+        requests_dir = self.paths.pending_requests_dir(repo_hash)
+        for request_path in sorted(requests_dir.glob("*.json")) if requests_dir.exists() else []:
+            payload = read_json(request_path, None)
+            if not isinstance(payload, dict):
+                continue
+            request = PendingRequest.from_dict(payload)
+            archive_reason: str | None = None
+            if request.status == "pending":
+                if any(item["request_id"] == request.request_id for item in hygiene["stale_pending_requests"]):
+                    request.status = "expired"
+                    archive_reason = f"unclaimed pending request older than {stale_hours}h"
+            elif any(item["request_id"] == request.request_id for item in hygiene["stale_historical_requests"]):
+                archive_reason = f"historical request older than {retention_hours}h"
+            if archive_reason is None:
+                continue
+
+            archived_payload = request.to_dict()
+            archived_payload["cleanup_reason"] = archive_reason
+            archived_payload["archived_at"] = utc_now()
+            archived_to = self.paths.archived_requests_dir(repo_hash) / request_path.name
+            if archived_to.exists():
+                archived_to = archived_to.with_name(f"{archived_to.stem}-{int(datetime.now(timezone.utc).timestamp())}{archived_to.suffix}")
+            atomic_write_json(archived_to, archived_payload)
+            request_path.unlink()
+            archived_requests.append(
+                {
+                    "request_id": request.request_id,
+                    "action": request.action,
+                    "previous_status": payload.get("status"),
+                    "archived_to": str(archived_to),
+                    "reason": archive_reason,
+                }
+            )
+
+        return {
+            "repo_root": str(repo_root),
+            "stale_hours": stale_hours,
+            "retention_hours": retention_hours,
+            "archived_sessions": archived_sessions,
+            "archived_requests": archived_requests,
+            "hygiene": hygiene,
+        }
+
     def _activate(self, repo_root: Path, session_id: str, contract: dict[str, Any], project_config: dict[str, Any]) -> dict[str, Any]:
         namespace = self.paths.namespace(repo_root, session_id)
         self.paths.ensure_repo(namespace.repo_hash)
@@ -230,6 +477,7 @@ class AutonomousLoopRuntime:
             contract_hash=contract_hash,
             created_at=now,
             updated_at=now,
+            heartbeat_at=now,
         )
         ledger = {
             "version": "0.1",
@@ -270,15 +518,21 @@ class AutonomousLoopRuntime:
         session_dir = self.paths.sessions_dir(repo_hash)
         if not session_dir.exists():
             return None, None
+        if run_id is not None:
+            namespace = self.paths.namespace(repo_root, run_id)
+            state = self.store.load_state(namespace)
+            return (namespace, state) if state else (None, None)
+
+        live_candidates: list[tuple[datetime, Namespace, RuntimeState]] = []
         for candidate in sorted(session_dir.iterdir()):
-            namespace = Namespace(repo_root=str(repo_root), repo_hash=repo_hash, session_id=candidate.name if run_id is None else run_id)
-            if run_id is not None:
-                namespace = self.paths.namespace(repo_root, run_id)
-                state = self.store.load_state(namespace)
-                return (namespace, state) if state else (None, None)
+            namespace = Namespace(repo_root=str(repo_root), repo_hash=repo_hash, session_id=candidate.name)
             state = self.store.load_state(namespace)
             if state and state.active:
-                return namespace, state
+                activity = _parse_utc_timestamp(_state_activity_timestamp(state)) or datetime.fromtimestamp(0, tz=timezone.utc)
+                live_candidates.append((activity, namespace, state))
+        if live_candidates:
+            _, namespace, state = max(live_candidates, key=lambda item: item[0])
+            return namespace, state
         return None, None
 
     def enable(self, project_dir: str | Path, goal: str, enabled: bool = True, max_iterations: int = 12) -> dict[str, Any]:
@@ -301,9 +555,7 @@ class AutonomousLoopRuntime:
         state.active = False
         state.paused = True
         state.paused_at = utc_now()
-        state.updated_at = state.paused_at
-        runtime.store.save_state(namespace, state)
-        runtime.store.append_event(namespace, {"timestamp": state.paused_at, "type": "paused"})
+        runtime._touch_state(namespace, state, timestamp=state.paused_at, event_type="paused")
         return {"action": "allow", "paused": True, "run_id": state.run_id}
 
     def resume(self, project_dir: str | Path, run_id: str | None = None) -> dict[str, Any]:
@@ -318,9 +570,7 @@ class AutonomousLoopRuntime:
         state.state = "active"
         state.active = True
         state.paused = False
-        state.updated_at = utc_now()
-        runtime.store.save_state(namespace, state)
-        runtime.store.append_event(namespace, {"timestamp": state.updated_at, "type": "resumed"})
+        runtime._touch_state(namespace, state, event_type="resumed")
         return {"action": "allow", "paused": False, "run_id": state.run_id}
 
     def wrap_hook_result(self, exit_code: int, stdout: str = "", stderr: str = "") -> str:
@@ -364,8 +614,7 @@ class AutonomousLoopRuntime:
         contract = runtime.store.load_contract(namespace)
         if contract_hash and contract_hash != state.contract_hash:
             state.last_block_reason = "contract hash mismatch"
-            state.updated_at = utc_now()
-            runtime.store.save_state(namespace, state)
+            runtime._touch_state(namespace, state)
             return {"action": "hard_stop", "reason": "contract hash mismatch"}
         if state.paused:
             return {"action": "noop", "reason": "paused"}
@@ -373,35 +622,31 @@ class AutonomousLoopRuntime:
             signature = failure_signature or "tasks-incomplete"
             hard_stop, reason = runtime._update_failure_counters(state, contract, signature)
             state.last_block_reason = "required tasks missing"
-            state.updated_at = utc_now()
-            runtime.store.save_state(namespace, state)
+            runtime._touch_state(namespace, state)
             if hard_stop:
                 state.state = "failed"
                 state.active = False
                 state.failed_at = utc_now()
-                runtime.store.save_state(namespace, state)
+                runtime._touch_state(namespace, state, timestamp=state.failed_at)
                 return {"action": "hard_stop", "reason": reason}
             return {"action": "block", "reason": state.last_block_reason}
         if not final_gate_passed:
             signature = failure_signature or "final-gates-failed"
             hard_stop, reason = runtime._update_failure_counters(state, contract, signature)
             state.last_block_reason = "final gates failed"
-            state.updated_at = utc_now()
-            runtime.store.save_state(namespace, state)
+            runtime._touch_state(namespace, state)
             if hard_stop:
                 state.state = "failed"
                 state.active = False
                 state.failed_at = utc_now()
-                runtime.store.save_state(namespace, state)
+                runtime._touch_state(namespace, state, timestamp=state.failed_at)
                 return {"action": "hard_stop", "reason": reason}
             return {"action": "block", "reason": state.last_block_reason}
         state.state = "released"
         state.active = False
         state.paused = False
         state.released_at = utc_now()
-        state.updated_at = state.released_at
-        runtime.store.save_state(namespace, state)
-        runtime.store.append_event(namespace, {"timestamp": state.released_at, "type": "released"})
+        runtime._touch_state(namespace, state, timestamp=state.released_at, event_type="released")
         return {"action": "allow", "released": True, "run_id": state.run_id}
 
     def _queue_request(self, action: str, cwd: str | Path, payload: dict[str, Any]) -> dict[str, Any]:
@@ -438,6 +683,13 @@ class AutonomousLoopRuntime:
             return None
         repo_root = self.paths.resolve_repo_root(cwd)
         namespace = self.paths.namespace(repo_root, session_id)
+        if action == "enable":
+            self._cleanup_repo(
+                repo_root,
+                stale_hours=DEFAULT_STALE_HOURS,
+                retention_hours=DEFAULT_RETENTION_HOURS,
+                preserve_session_id=session_id,
+            )
         if require_existing_state and self.store.load_state(namespace) is None:
             return None
         request = PendingRequest(
@@ -534,8 +786,7 @@ class AutonomousLoopRuntime:
             state.state = "released"
             state.active = False
             state.released_at = utc_now()
-        state.updated_at = utc_now()
-        self.store.save_state(namespace, state)
+        self._touch_state(namespace, state)
         self.store.save_request(namespace.repo_hash, request)
         self.store.append_event(namespace, {"timestamp": utc_now(), "type": f"request-{request.action}"})
         logger.debug("applied request action=%s request_id=%s", request.action, request.request_id)
@@ -544,9 +795,16 @@ class AutonomousLoopRuntime:
     def handle_session_start_payload(self, payload: dict[str, Any]) -> dict[str, Any] | None:
         repo_root = self.paths.resolve_repo_root(payload["cwd"])
         namespace = self.paths.namespace(repo_root, str(payload["session_id"]))
+        self._cleanup_repo(
+            repo_root,
+            stale_hours=DEFAULT_STALE_HOURS,
+            retention_hours=DEFAULT_RETENTION_HOURS,
+            preserve_session_id=namespace.session_id,
+        )
         state = self.store.load_state(namespace)
         if state is None or state.state not in {"active", "paused"}:
             return None
+        self._touch_state(namespace, state, event_type="heartbeat")
         contract = self.store.load_contract(namespace) or {}
         outstanding = ", ".join(state.outstanding_task_ids) or "none recorded yet"
         gates = ", ".join(state.last_gate_failures) or "none recorded yet"
@@ -579,6 +837,10 @@ class AutonomousLoopRuntime:
             contract = self.store.load_contract(namespace)
             verification = self.store.load_verification(namespace)
             ledger = self.store.load_ledger(namespace) or {}
+            state = self.store.load_state(namespace)
+            if state is None:
+                return None
+            state.heartbeat_at = utc_now()
             if contract is None or verification is None:
                 state.state = "failed"
                 state.active = False
@@ -743,6 +1005,19 @@ class AutonomousLoopRuntime:
                     "command_path": machine["command_path"],
                     "command_mode": machine["command_mode"],
                 }
+                if command_path is not None and not _paths_equivalent(command_path, machine["command_path"]):
+                    checks["cli_on_path"] = {
+                        "ok": False,
+                        "path": command_path,
+                        "reason": (
+                            "`autonomous-loop` on PATH does not match the machine bootstrap command_path"
+                        ),
+                        "expected_path": machine["command_path"],
+                        "remediation": (
+                            "Update PATH so `autonomous-loop` resolves to the bootstrapped launcher, "
+                            "or rerun `autonomous-loop bootstrap --force` after installing the intended CLI."
+                        ),
+                    }
 
         hooks_path = self.paths.codex_home_hooks_path()
         if not hooks_path.is_file():
@@ -806,12 +1081,47 @@ class AutonomousLoopRuntime:
                         checks["repo_install"] = {"ok": True, "repo_root": str(repo_root)}
                 else:
                     checks["repo_install"] = {"ok": True, "repo_root": str(repo_root)}
+            checks["runtime_hygiene"] = {
+                "ok": True,
+                **self._inspect_runtime_hygiene(
+                    repo_root,
+                    stale_hours=DEFAULT_STALE_HOURS,
+                    retention_hours=DEFAULT_RETENTION_HOURS,
+                ),
+            }
 
         ok = all(bool(item.get("ok")) for item in checks.values())
         payload: dict[str, Any] = {"ok": ok, "checks": checks}
         if cwd is not None:
             payload["cwd"] = str(Path(cwd))
         return payload
+
+    def cleanup(
+        self,
+        cwd: str | Path,
+        *,
+        stale_hours: int = DEFAULT_STALE_HOURS,
+        retention_hours: int = DEFAULT_RETENTION_HOURS,
+    ) -> dict[str, Any]:
+        if stale_hours < 1:
+            return {"ok": False, "error_code": "invalid_stale_hours", "message": "stale_hours must be at least 1"}
+        if retention_hours < stale_hours:
+            return {
+                "ok": False,
+                "error_code": "invalid_retention_hours",
+                "message": "retention_hours must be greater than or equal to stale_hours",
+            }
+
+        repo_root = self.paths.resolve_repo_root(cwd)
+        current_session_id, _ = _codex_session_binding()
+        result = self._cleanup_repo(
+            repo_root,
+            stale_hours=stale_hours,
+            retention_hours=retention_hours,
+            preserve_session_id=current_session_id,
+        )
+        result["ok"] = True
+        return result
 
     def status(self, cwd: str | Path, session_id: str | None = None) -> dict[str, Any]:
         repo_root = self.paths.resolve_repo_root(cwd)
@@ -822,12 +1132,37 @@ class AutonomousLoopRuntime:
             state = self.store.load_state(namespace)
             if state:
                 sessions.append(state.to_dict())
+        sessions.sort(
+            key=lambda item: _parse_utc_timestamp(str(item.get("heartbeat_at") or item.get("updated_at") or item.get("created_at"))) or datetime.fromtimestamp(0, tz=timezone.utc),
+            reverse=True,
+        )
         requests = [request.to_dict() for request in self.store.list_requests(repo_hash)]
+        requests.sort(
+            key=lambda item: _parse_utc_timestamp(str(item.get("created_at") or "")) or datetime.fromtimestamp(0, tz=timezone.utc),
+            reverse=True,
+        )
         if session_id:
             namespace = self.paths.namespace(repo_root, session_id)
             state = self.store.load_state(namespace)
             sessions = [state.to_dict()] if state else []
-        return {"repo_root": str(repo_root), "repo_hash": repo_hash, "sessions": sessions, "pending_requests": requests}
+        archived_sessions_count = sum(1 for _ in self.paths.archived_sessions_dir(repo_hash).glob("*")) if self.paths.archived_sessions_dir(repo_hash).exists() else 0
+        archived_requests_count = sum(1 for _ in self.paths.archived_requests_dir(repo_hash).glob("*.json")) if self.paths.archived_requests_dir(repo_hash).exists() else 0
+        return {
+            "repo_root": str(repo_root),
+            "repo_hash": repo_hash,
+            "sessions": sessions,
+            "pending_requests": requests,
+            "archived_counts": {
+                "sessions": archived_sessions_count,
+                "requests": archived_requests_count,
+            },
+            "hygiene": self._inspect_runtime_hygiene(
+                repo_root,
+                stale_hours=DEFAULT_STALE_HOURS,
+                retention_hours=DEFAULT_RETENTION_HOURS,
+                preserve_session_id=session_id,
+            ),
+        }
 
     def install_repo(
         self,

@@ -281,6 +281,7 @@ class AutonomousLoopContractTests(unittest.TestCase):
         status = runtime.status(self.temp_dir, session_id="direct-thread-123")
         self.assertEqual(len(status["sessions"]), 1)
         self.assertEqual(status["sessions"][0]["state"], "active")
+        self.assertTrue(status["sessions"][0]["heartbeat_at"])
 
 
 class HookWrapperContractTests(unittest.TestCase):
