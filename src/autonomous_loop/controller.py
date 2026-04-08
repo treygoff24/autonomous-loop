@@ -8,7 +8,7 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
 
-from .bootstrap import build_machine_config, resolve_cli_path, validate_machine_config
+from .bootstrap import build_machine_config, detect_codex_version, resolve_cli_path, validate_machine_config
 from .gates import run_command, run_gate_profile
 from .hashes import stable_hash
 from .hooks import parse_claim_nonce, stop_block, stop_hard_stop
@@ -16,7 +16,7 @@ from .install_repo import InstallRepoFailure, inspect_repo
 from .locks import file_lock
 from .logging_utils import build_file_logger
 from .models import Namespace, PendingRequest, RuntimeState, utc_now
-from .paths import RuntimePaths, hash_text
+from .paths import RuntimePaths, hash_text, repo_hash_for
 from .storage import RuntimeStore, atomic_write_json, read_json
 
 DEFAULT_STALE_HOURS = 8
@@ -266,7 +266,7 @@ class AutonomousLoopRuntime:
         retention_hours: int,
         preserve_session_id: str | None = None,
     ) -> dict[str, Any]:
-        repo_hash = hash_text(str(repo_root))
+        repo_hash = repo_hash_for(repo_root)
         self.paths.ensure_repo(repo_hash)
         now = datetime.now(timezone.utc)
         stale_cutoff = now - timedelta(hours=stale_hours)
@@ -357,7 +357,7 @@ class AutonomousLoopRuntime:
             retention_hours=retention_hours,
             preserve_session_id=preserve_session_id,
         )
-        repo_hash = hash_text(str(repo_root))
+        repo_hash = repo_hash_for(repo_root)
         archived_sessions: list[dict[str, Any]] = []
         archived_requests: list[dict[str, Any]] = []
 
@@ -393,6 +393,7 @@ class AutonomousLoopRuntime:
                     state.last_block_reason = reason
                     self._touch_state(namespace, state, event_type="cleanup-archived")
 
+            self._clear_active_session(repo_hash, namespace.session_id)
             archived_to = _archive_move(session_path, self.paths.archived_sessions_dir(repo_hash) / session_path.name)
             archived_sessions.append(
                 {
@@ -503,6 +504,7 @@ class AutonomousLoopRuntime:
             self.store.save_state(namespace, state)
             self.store.save_ledger(namespace, ledger)
             self.store.append_event(namespace, {"timestamp": now, "type": "activated", "session_id": session_id})
+        self.store.write_active_session(namespace.repo_hash, session_id)
         self._logger(namespace).debug("activated contract_id=%s contract_hash=%s", normalized_contract["contractId"], contract_hash)
         return {
             "action": "enable",
@@ -514,7 +516,7 @@ class AutonomousLoopRuntime:
         }
 
     def _load_active_state(self, repo_root: Path, run_id: str | None = None) -> tuple[Namespace, RuntimeState] | tuple[None, None]:
-        repo_hash = hash_text(str(repo_root.resolve()))
+        repo_hash = repo_hash_for(repo_root)
         session_dir = self.paths.sessions_dir(repo_hash)
         if not session_dir.exists():
             return None, None
@@ -651,7 +653,7 @@ class AutonomousLoopRuntime:
 
     def _queue_request(self, action: str, cwd: str | Path, payload: dict[str, Any]) -> dict[str, Any]:
         repo_root = self.paths.resolve_repo_root(cwd)
-        repo_hash = hash_text(str(repo_root))
+        repo_hash = repo_hash_for(repo_root)
         request = PendingRequest(
             request_id=self.store.next_request_id(),
             action=action,
@@ -786,6 +788,8 @@ class AutonomousLoopRuntime:
             state.state = "released"
             state.active = False
             state.released_at = utc_now()
+        if request.action in ("disable", "release"):
+            self._clear_active_session(namespace.repo_hash, namespace.session_id)
         self._touch_state(namespace, state)
         self.store.save_request(namespace.repo_hash, request)
         self.store.append_event(namespace, {"timestamp": utc_now(), "type": f"request-{request.action}"})
@@ -819,6 +823,14 @@ class AutonomousLoopRuntime:
 
         return session_start_context(message)
 
+    def _clear_active_session(self, repo_hash: str, session_id: str) -> None:
+        recorded = self.store.read_active_session(repo_hash)
+        if recorded == session_id:
+            try:
+                self.paths.active_session_path(repo_hash).unlink(missing_ok=True)
+            except OSError:
+                pass
+
     def handle_stop_payload(self, payload: dict[str, Any]) -> dict[str, Any] | None:
         repo_root = self.paths.resolve_repo_root(payload["cwd"])
         namespace = self.paths.namespace(repo_root, str(payload["session_id"]))
@@ -827,6 +839,9 @@ class AutonomousLoopRuntime:
             request = self.store.find_pending_request_by_nonce(namespace.repo_hash, nonce)
             if request is not None:
                 self._apply_request(namespace, request, repo_root)
+        active_session = self.store.read_active_session(namespace.repo_hash)
+        if active_session is not None and active_session != namespace.session_id:
+            return None
         state = self.store.load_state(namespace)
         if state is None:
             return None
@@ -847,6 +862,7 @@ class AutonomousLoopRuntime:
                 state.failed_at = utc_now()
                 state.updated_at = state.failed_at
                 self.store.save_state(namespace, state)
+                self._clear_active_session(namespace.repo_hash, namespace.session_id)
                 return stop_hard_stop("autonomous-loop failed closed: unreadable contract or verification state")
             contract_hash = stable_hash(_hashable_contract(contract))
             if contract_hash != state.contract_hash or verification.get("contractHash") != state.contract_hash:
@@ -855,6 +871,7 @@ class AutonomousLoopRuntime:
                 state.failed_at = utc_now()
                 state.updated_at = state.failed_at
                 self.store.save_state(namespace, state)
+                self._clear_active_session(namespace.repo_hash, namespace.session_id)
                 return stop_hard_stop("autonomous-loop failed closed: contract hash mismatch")
             outstanding: list[str] = []
             task_details: list[str] = []
@@ -891,6 +908,7 @@ class AutonomousLoopRuntime:
                     state.failed_at = utc_now()
                     state.updated_at = state.failed_at
                     self.store.save_state(namespace, state)
+                    self._clear_active_session(namespace.repo_hash, namespace.session_id)
                     return stop_hard_stop(stop_reason or "autonomous-loop failed closed")
                 return stop_block(reason)
             final_profile = state.gate_profile or project_config.get("defaults", {}).get("finalGateProfile", "final")
@@ -914,6 +932,7 @@ class AutonomousLoopRuntime:
                     state.failed_at = utc_now()
                     state.updated_at = state.failed_at
                     self.store.save_state(namespace, state)
+                    self._clear_active_session(namespace.repo_hash, namespace.session_id)
                     return stop_hard_stop(stop_reason or "autonomous-loop failed closed")
                 return stop_block(reason)
             state.state = "released"
@@ -927,6 +946,7 @@ class AutonomousLoopRuntime:
             self.store.save_state(namespace, state)
             self.store.save_ledger(namespace, ledger)
             self.store.append_event(namespace, {"timestamp": state.released_at, "type": "released"})
+            self._clear_active_session(namespace.repo_hash, namespace.session_id)
             logger.debug("released run_id=%s", state.run_id)
             return None
 
@@ -939,7 +959,7 @@ class AutonomousLoopRuntime:
                 "message": cli_error or "autonomous-loop was not found on PATH",
             }
 
-        machine_config = build_machine_config(command_path)
+        machine_config = build_machine_config(command_path, codex_home=self.paths.codex_home())
         hook_commands = machine_config["hook_commands"]
 
         written: list[str] = []
@@ -1018,6 +1038,22 @@ class AutonomousLoopRuntime:
                             "or rerun `autonomous-loop bootstrap --force` after installing the intended CLI."
                         ),
                     }
+                if "codex_version" in machine:
+                    current_codex = detect_codex_version(self.paths.codex_home())
+                    recorded_codex = machine["codex_version"]
+                    if current_codex is not None and current_codex != recorded_codex:
+                        checks["codex_version_drift"] = {
+                            "ok": False,
+                            "reason": (
+                                f"Codex version changed from {recorded_codex!r} "
+                                f"to {current_codex!r} since last bootstrap"
+                            ),
+                            "recorded_version": recorded_codex,
+                            "current_version": current_codex,
+                            "remediation": "Run 'autonomous-loop bootstrap --force' to update machine config.",
+                        }
+                    else:
+                        checks["codex_version_drift"] = {"ok": True, "codex_version": recorded_codex}
 
         hooks_path = self.paths.codex_home_hooks_path()
         if not hooks_path.is_file():
@@ -1090,6 +1126,35 @@ class AutonomousLoopRuntime:
                 ),
             }
 
+        repos_dir = self.paths.root / "repos"
+        if repos_dir.is_dir():
+            inode_to_hashes: dict[int, list[str]] = {}
+            for hash_dir in repos_dir.iterdir():
+                if not hash_dir.is_dir():
+                    continue
+                cache = read_json(self.paths.project_cache_path(hash_dir.name), None)
+                if not isinstance(cache, dict):
+                    continue
+                root_path_str = cache.get("repo_root")
+                if not root_path_str:
+                    continue
+                try:
+                    inode = Path(root_path_str).stat().st_ino
+                except OSError:
+                    continue
+                inode_to_hashes.setdefault(inode, []).append(hash_dir.name)
+            duplicates = {str(k): v for k, v in inode_to_hashes.items() if len(v) > 1}
+            if duplicates:
+                checks["duplicate_repo_hashes"] = {
+                    "ok": False,
+                    "reason": (
+                        f"{len(duplicates)} repo(s) with duplicate hash directories "
+                        "(case-sensitive path collision on a case-insensitive filesystem). "
+                        "Run 'autonomous-loop cleanup' to archive stale entries."
+                    ),
+                    "duplicates": duplicates,
+                }
+
         ok = all(bool(item.get("ok")) for item in checks.values())
         payload: dict[str, Any] = {"ok": ok, "checks": checks}
         if cwd is not None:
@@ -1125,7 +1190,7 @@ class AutonomousLoopRuntime:
 
     def status(self, cwd: str | Path, session_id: str | None = None) -> dict[str, Any]:
         repo_root = self.paths.resolve_repo_root(cwd)
-        repo_hash = hash_text(str(repo_root))
+        repo_hash = repo_hash_for(repo_root)
         sessions: list[dict[str, Any]] = []
         for session_path in sorted(self.paths.sessions_dir(repo_hash).glob("*")) if self.paths.sessions_dir(repo_hash).exists() else []:
             namespace = Namespace(repo_root=str(repo_root), repo_hash=repo_hash, session_id=session_path.name)

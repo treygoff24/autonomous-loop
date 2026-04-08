@@ -16,7 +16,7 @@ if str(SRC_ROOT) not in sys.path:
     sys.path.insert(0, str(SRC_ROOT))
 
 from autonomous_loop.controller import AutonomousLoopRuntime
-from autonomous_loop.paths import hash_text
+from autonomous_loop.paths import repo_hash_for
 from autonomous_loop.storage import atomic_write_json, read_json
 
 from support import build_cli_env, make_codex_home, make_node_repo, make_temp_repo, make_user_bin, run_cli
@@ -54,7 +54,7 @@ class CleanupTests(unittest.TestCase):
         with patch.dict("os.environ", {"CODEX_THREAD_ID": "stale-session"}, clear=False):
             result = self.runtime.request_enable(cwd=self.repo, objective="Stale session")
         self.assertEqual(result["activation_mode"], "direct-env")
-        repo_hash = hash_text(str(self.runtime.paths.resolve_repo_root(self.repo)))
+        repo_hash = repo_hash_for(self.runtime.paths.resolve_repo_root(self.repo))
 
         session_dir = self.runtime.paths.session_dir(self.runtime.paths.namespace(self.repo, "stale-session"))
         state_path = session_dir / "state.json"
@@ -126,7 +126,7 @@ class CleanupTests(unittest.TestCase):
         self.assertEqual(result["activation_mode"], "direct-env")
         status = self.runtime.status(self.repo)
         self.assertEqual([item["session_id"] for item in status["sessions"]], ["current-session"])
-        archived_old_state = self.runtime.paths.archived_sessions_dir(hash_text(str(self.runtime.paths.resolve_repo_root(self.repo)))) / "old-session" / "state.json"
+        archived_old_state = self.runtime.paths.archived_sessions_dir(repo_hash_for(self.runtime.paths.resolve_repo_root(self.repo))) / "old-session" / "state.json"
         self.assertTrue(archived_old_state.exists())
 
     def test_session_start_refreshes_heartbeat_and_archives_old_requests(self) -> None:
@@ -143,7 +143,7 @@ class CleanupTests(unittest.TestCase):
 
         with patch.dict("os.environ", {}, clear=False):
             queued = self.runtime.request_action("release", cwd=self.repo, reason="old pending release")
-        repo_hash = hash_text(str(self.runtime.paths.resolve_repo_root(self.repo)))
+        repo_hash = repo_hash_for(self.runtime.paths.resolve_repo_root(self.repo))
         pending_path = self.runtime.paths.pending_request_path(repo_hash, queued["request_id"])
         pending_payload = read_json(pending_path, {})
         pending_payload["created_at"] = _hours_ago(48)

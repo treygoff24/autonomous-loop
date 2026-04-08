@@ -51,6 +51,16 @@ class RuntimeStore:
     def next_request_id(self) -> str:
         return uuid.uuid4().hex
 
+    def write_active_session(self, repo_hash: str, session_id: str) -> None:
+        atomic_write_json(self.paths.active_session_path(repo_hash), {"session_id": session_id})
+
+    def read_active_session(self, repo_hash: str) -> str | None:
+        payload = read_json(self.paths.active_session_path(repo_hash), None)
+        if not isinstance(payload, dict):
+            return None
+        value = payload.get("session_id")
+        return str(value) if value else None
+
     def write_project_cache(self, repo_hash: str, repo_root: str) -> None:
         self.paths.ensure_repo(repo_hash)
         atomic_write_json(self.paths.project_cache_path(repo_hash), {"repo_root": repo_root})

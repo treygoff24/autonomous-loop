@@ -3,6 +3,7 @@ from __future__ import annotations
 import hashlib
 import os
 import re
+import sys
 from pathlib import Path
 
 from .models import Namespace
@@ -10,6 +11,28 @@ from .models import Namespace
 
 def hash_text(value: str) -> str:
     return hashlib.sha256(value.encode("utf-8")).hexdigest()[:16]
+
+
+def _is_case_insensitive(path_str: str) -> bool:
+    if sys.platform != "darwin":
+        return False
+    try:
+        p = Path(path_str)
+        swapped = p.parent / p.name.swapcase()
+        return swapped.exists() and p.stat().st_ino == swapped.stat().st_ino
+    except OSError:
+        return False
+
+
+def _normalize_repo_path(path_str: str) -> str:
+    if _is_case_insensitive(path_str):
+        return path_str.lower()
+    return path_str
+
+
+def repo_hash_for(path: "str | Path") -> str:
+    resolved = Path(path).expanduser().resolve()
+    return hash_text(_normalize_repo_path(str(resolved)))
 
 
 def safe_name(value: str) -> str:
@@ -39,7 +62,7 @@ class RuntimePaths:
 
     def namespace(self, repo_root: str | Path, session_id: str) -> Namespace:
         repo = self.resolve_repo_root(repo_root)
-        return Namespace(repo_root=str(repo), repo_hash=hash_text(str(repo)), session_id=session_id)
+        return Namespace(repo_root=str(repo), repo_hash=repo_hash_for(repo), session_id=session_id)
 
     def codex_home(self) -> Path:
         return self.root.parent
@@ -58,6 +81,9 @@ class RuntimePaths:
 
     def project_cache_path(self, repo_hash: str) -> Path:
         return self.repo_dir(repo_hash) / "project-cache.json"
+
+    def active_session_path(self, repo_hash: str) -> Path:
+        return self.repo_dir(repo_hash) / "active-session.json"
 
     def pending_requests_dir(self, repo_hash: str) -> Path:
         return self.repo_dir(repo_hash) / "pending-requests"

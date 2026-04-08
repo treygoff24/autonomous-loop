@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import os
 import shlex
 import shutil
@@ -7,7 +8,7 @@ from pathlib import Path
 from typing import Any
 
 
-MACHINE_VERSION = "0.1"
+MACHINE_VERSION = "0.2"
 CLI_BINARY = "autonomous-loop"
 
 
@@ -63,14 +64,49 @@ def build_hooks_payload(hook_commands: dict[str, str]) -> dict[str, Any]:
     }
 
 
-def build_machine_config(command_path: str) -> dict[str, Any]:
+def detect_codex_version(codex_home: Path) -> str | None:
+    """Return the installed Codex CLI version, or fall back to version.json metadata."""
+    import shutil as _shutil
+    import subprocess as _subprocess
+
+    codex_bin = _shutil.which("codex")
+    if codex_bin:
+        try:
+            result = _subprocess.run(
+                [codex_bin, "--version"],
+                capture_output=True, text=True, timeout=5,
+            )
+            if result.returncode == 0 and result.stdout.strip():
+                return result.stdout.strip().split()[-1]
+        except (OSError, _subprocess.TimeoutExpired):
+            pass
+
+    version_path = codex_home / "version.json"
+    if not version_path.is_file():
+        return None
+    try:
+        payload = json.loads(version_path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return None
+    if not isinstance(payload, dict):
+        return None
+    value = payload.get("latest_version")
+    return str(value) if value is not None else None
+
+
+def build_machine_config(command_path: str, codex_home: Path | None = None) -> dict[str, Any]:
     hook_commands = build_hook_commands(command_path)
-    return {
+    config: dict[str, Any] = {
         "version": MACHINE_VERSION,
         "command_mode": "absolute-cli",
         "command_path": command_path,
         "hook_commands": hook_commands,
     }
+    if codex_home is not None:
+        codex_version = detect_codex_version(codex_home)
+        if codex_version is not None:
+            config["codex_version"] = codex_version
+    return config
 
 
 def validate_machine_config(payload: Any) -> tuple[bool, str | None]:
