@@ -419,6 +419,7 @@ def run_install_repo_cli(
     repo_root: Path,
     *,
     force: bool = False,
+    install_hooks: bool = False,
     package_manager: str | None = None,
     prefer_scripts: list[str] | None = None,
     env: dict[str, str] | None = None,
@@ -426,6 +427,8 @@ def run_install_repo_cli(
     command = [sys.executable, str(BIN_ROOT / "autoloop_cli.py"), "install-repo", "--repo", str(repo_root)]
     if force:
         command.append("--force")
+    if install_hooks:
+        command.append("--install-hooks")
     if package_manager is not None:
         command.extend(["--package-manager", package_manager])
     if prefer_scripts:

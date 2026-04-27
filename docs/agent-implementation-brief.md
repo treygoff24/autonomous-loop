@@ -58,11 +58,12 @@ Each target repo gets:
 
 ```text
 .codex/autoloop.project.json
-.codex/hooks.json
 .agents/skills/autonomous-loop/SKILL.md
 ```
 
-Those files are version-controlled and human-reviewable. `install-repo` generates `.codex/autoloop.project.json` for Node-style repos by inspecting `package.json`, `package.json.packageManager`, lockfiles, and the supported verification scripts `typecheck`, `lint`, and `test`.
+Those files are version-controlled and human-reviewable. Repo-local `.codex/hooks.json` is opt-in only via `install-repo --install-hooks`; the default enforcement path is the global `$CODEX_HOME/hooks.json` installed by machine bootstrap.
+
+`install-repo` generates `.codex/autoloop.project.json` by inspecting target-repo evidence. It supports Node package-manager signals and scripts (`check`, `quality`, `ci`, `typecheck`, `lint`, `test`), Make targets, Python project files, Rust crates, and Go modules.
 
 ### Mutable runtime state
 
@@ -254,18 +255,19 @@ The `Stop` hook is the controller. It must:
 5. Load session state for the real `session_id`
 6. No-op if the loop is not active for that repo plus session
 7. Validate contract and verification integrity
-8. Recompute evidence
-9. If required tasks remain incomplete:
+8. Read the latest Codex `update_plan` state from the hook transcript when available
+9. Recompute evidence
+10. If the latest plan has any non-`completed` items, or required tasks remain incomplete:
    - run the fast gate profile
    - update ledger and failure counters
    - return `{"decision":"block","reason":"..."}`
-10. If tasks are complete:
+11. If tasks are complete:
    - run the final gate profile
    - if gates fail, block with a narrow reason
-11. If deterministic checks pass:
+12. If deterministic checks pass:
    - mark the run `released`
    - emit no stdout
-12. If iteration or repeated-failure thresholds are exceeded:
+13. If iteration or repeated-failure thresholds are exceeded:
    - mark the run `failed`
    - return `{"continue":false,"stopReason":"..."}`
 

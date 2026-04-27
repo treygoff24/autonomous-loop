@@ -48,6 +48,7 @@ def build_parser() -> argparse.ArgumentParser:
     install.add_argument("--force", action="store_true")
     install.add_argument("--package-manager")
     install.add_argument("--prefer-scripts", type=_csv_arg)
+    install.add_argument("--install-hooks", action="store_true")
 
     cleanup = subparsers.add_parser("cleanup")
     cleanup.add_argument("--cwd", required=True)
@@ -63,6 +64,9 @@ def build_parser() -> argparse.ArgumentParser:
     status = subparsers.add_parser("status")
     status.add_argument("--cwd", required=True)
     status.add_argument("--session-id")
+
+    agent_instructions = subparsers.add_parser("agent-instructions")
+    agent_instructions.add_argument("--cwd", required=True)
 
     return parser
 
@@ -109,6 +113,7 @@ def main(argv: list[str] | None = None) -> int:
             force=args.force,
             package_manager=args.package_manager,
             prefer_scripts=args.prefer_scripts,
+            install_hooks=args.install_hooks,
         )
         emit_json(result)
         return 1 if result.get("ok") is False else 0
@@ -135,6 +140,11 @@ def main(argv: list[str] | None = None) -> int:
     if args.command == "status":
         emit_json(runtime.status(args.cwd, session_id=args.session_id))
         return 0
+
+    if args.command == "agent-instructions":
+        result = runtime.agent_instructions(args.cwd)
+        emit_json(result)
+        return 1 if result.get("ok") is False else 0
 
     parser.error("unknown command")
     return 2

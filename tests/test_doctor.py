@@ -139,7 +139,7 @@ class DoctorTests(unittest.TestCase):
         self.assertFalse(payload["ok"])
         self.assertFalse(payload["checks"]["repo_install"]["ok"])
 
-    def test_with_cwd_stale_repo_hooks_reports_mismatch_with_remediation(self) -> None:
+    def test_with_cwd_repo_local_autonomous_loop_hooks_reports_duplicate_with_remediation(self) -> None:
         self._bootstrap()
         repo = make_node_repo(
             self.temp_dir / "repo",
@@ -166,7 +166,7 @@ class DoctorTests(unittest.TestCase):
         self.assertEqual(completed.returncode, 1)
         payload = json.loads(completed.stdout)
         self.assertFalse(payload["ok"])
-        check = payload["checks"]["repo_install"]
+        check = payload["checks"]["repo_hooks"]
         self.assertFalse(check["ok"])
         self.assertIn("stop command does not match", check["reason"])
         self.assertIn("remediation", check)
@@ -188,6 +188,25 @@ class DoctorTests(unittest.TestCase):
         payload = json.loads(completed.stdout)
         self.assertTrue(payload["ok"])
         self.assertTrue(payload["checks"]["repo_install"]["ok"])
+
+    def test_with_cwd_explicit_matching_repo_hooks_passes_with_warning(self) -> None:
+        self._bootstrap()
+        repo = make_node_repo(
+            self.temp_dir / "repo-with-hooks",
+            package_manager="npm@10.9.0",
+            scripts={"lint": "eslint .", "test": "vitest run"},
+            lockfiles=("package-lock.json",),
+        )
+        install = run_cli(["install-repo", "--repo", str(repo), "--install-hooks"], env=self.env)
+        self.assertEqual(install.returncode, 0, f"install-repo failed: {install.stdout}\n{install.stderr}")
+
+        completed = run_cli(["doctor", "--cwd", str(repo)], env=self.env)
+
+        self.assertEqual(completed.returncode, 0)
+        payload = json.loads(completed.stdout)
+        self.assertTrue(payload["ok"])
+        self.assertTrue(payload["checks"]["repo_hooks"]["ok"])
+        self.assertIn("warning", payload["checks"]["repo_hooks"])
 
     def test_doctor_reports_runtime_hygiene_warnings_without_failing(self) -> None:
         self._bootstrap()

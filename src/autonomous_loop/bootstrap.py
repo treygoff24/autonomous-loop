@@ -10,6 +10,8 @@ from typing import Any
 
 MACHINE_VERSION = "0.2"
 CLI_BINARY = "autonomous-loop"
+SESSION_START_TIMEOUT_SECONDS = 15
+STOP_TIMEOUT_SECONDS = 600
 
 
 def resolve_cli_path(binary_name: str = CLI_BINARY) -> tuple[str | None, str | None]:
@@ -42,7 +44,7 @@ def build_hooks_payload(hook_commands: dict[str, str]) -> dict[str, Any]:
                         {
                             "type": "command",
                             "command": hook_commands["session_start"],
-                            "timeout": 15,
+                            "timeout": SESSION_START_TIMEOUT_SECONDS,
                             "statusMessage": "autonomous-loop continuity",
                         }
                     ],
@@ -54,7 +56,7 @@ def build_hooks_payload(hook_commands: dict[str, str]) -> dict[str, Any]:
                         {
                             "type": "command",
                             "command": hook_commands["stop"],
-                            "timeout": 60,
+                            "timeout": STOP_TIMEOUT_SECONDS,
                             "statusMessage": "autonomous-loop stop gate",
                         }
                     ]

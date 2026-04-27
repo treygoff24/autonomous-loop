@@ -15,13 +15,16 @@ Machine bootstrap writes:
 
 - `$CODEX_HOME/hooks.json`
 - `$CODEX_HOME/skills/autonomous-loop/SKILL.md`
+- `$CODEX_HOME/skills/autonomous-loop/agents/openai.yaml`
 - `$CODEX_HOME/autoloop/machine.json`
 
 Repo install writes:
 
 - `.codex/autoloop.project.json`
-- `.codex/hooks.json`
 - `.agents/skills/autonomous-loop/SKILL.md`
+- `.agents/skills/autonomous-loop/agents/openai.yaml`
+
+Repo install intentionally does **not** write `.codex/hooks.json` by default. Global hooks in `$CODEX_HOME/hooks.json` enforce the loop across profiles. Use `autonomous-loop install-repo --install-hooks` only when a repo explicitly wants local hook files.
 
 Mutable runtime state lives under `$CODEX_HOME/autoloop`. It does not live in the target repo.
 
@@ -39,7 +42,25 @@ autonomous-loop doctor --cwd /path/to/repo
 
 If all five commands succeed, stop there. The install is good.
 
+For a non-developer friend installing from GitHub, prefer:
+
+```bash
+python3 -m pip install "git+https://github.com/treygoff24/autonomous-loop.git@v0.2.0"
+autonomous-loop bootstrap
+autonomous-loop doctor
+autonomous-loop install-repo --repo /path/to/repo
+autonomous-loop doctor --cwd /path/to/repo
+```
+
 If Codex was already open before bootstrap, restart it once so it reloads the global hooks and skill.
+
+For a fresh-context agent handoff, run:
+
+```bash
+autonomous-loop agent-instructions --cwd /path/to/repo
+```
+
+That output includes the exact reminders future agents need: call `update_plan`, keep the task list truthful, use only trusted gates from `.codex/autoloop.project.json`, and do not finish until plan items and gates are green.
 
 ## How to tell whether the install is healthy
 
@@ -100,6 +121,10 @@ Reinstall the repo-local files:
 autonomous-loop install-repo --repo /path/to/repo --force
 autonomous-loop doctor --cwd /path/to/repo
 ```
+
+If `repo_hooks` fails, the repo has a stale or mismatched `.codex/hooks.json`. Remove that file unless the repo intentionally opts into local hooks; for opt-in repos, rerun `autonomous-loop install-repo --repo /path/to/repo --force --install-hooks`.
+
+`install-repo` autodetects verification commands from Node combined scripts (`check`, `quality`, `ci`) and standard Node scripts (`typecheck`, `lint`, `test`), plus Make, Python, Rust, and Go project files. If detection fails, add a trusted check script/target or pass explicit preferences supported by the CLI.
 
 ## If the loop seems stuck or messy
 

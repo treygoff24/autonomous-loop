@@ -28,6 +28,14 @@ autonomous-loop install-repo --repo ~/Code/my-app --prefer-scripts lint,test
 
 `--prefer-scripts` is a single comma-separated argument.
 
+## Explicitly Install Repo-Local Hooks
+
+Global hooks are the default enforcement path. Only opt into repo-local hooks when you deliberately want local hook files in the repo:
+
+```bash
+autonomous-loop install-repo --repo ~/Code/my-app --install-hooks
+```
+
 ## Machine Bootstrap Missing
 
 If you run `install-repo` before `bootstrap`, the command exits non-zero and returns JSON with:
@@ -46,7 +54,7 @@ Then rerun `install-repo`.
 
 ## Unsafe Install Fails Closed
 
-If the target repo has `package.json` but none of `typecheck`, `lint`, or `test`, `install-repo` exits non-zero and returns machine-readable JSON explaining the failure and remediation.
+If the target repo has no detectable verification command, `install-repo` exits non-zero and returns machine-readable JSON explaining the failure and remediation. Node repos should define at least one of `check`, `quality`, `ci`, `typecheck`, `lint`, or `test`; non-Node repos can use standard Make/Python/Rust/Go project files.
 
 ## Enable The Loop For A Task
 

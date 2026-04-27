@@ -19,7 +19,7 @@
           {
             "type": "command",
             "command": "autonomous-loop hook stop",
-            "timeout": 60,
+            "timeout": 600,
             "statusMessage": "autonomous-loop stop gate"
           }
         ]

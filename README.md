@@ -6,16 +6,42 @@ If you are using an agent to install or operate this, point it at [`AGENT_BUILD_
 
 ## Quickstart
 
-1. Install the package:
+### Install from GitHub
+
+For friends or a second machine, install the tagged release directly from GitHub:
+
+```bash
+python3 -m pip install "git+https://github.com/treygoff24/autonomous-loop.git@v0.2.0"
+```
+
+If you use `pipx` for global CLI tools:
+
+```bash
+pipx install "git+https://github.com/treygoff24/autonomous-loop.git@v0.2.0"
+```
+
+This release is tested on Codex CLI `0.125.0` and requires Codex hook support with the `codex_hooks` feature enabled.
+
+### Install from a local checkout
+
+From this repo:
 
 ```bash
 python3 -m pip install .
 ```
 
-2. Bootstrap this machine once:
+### Bootstrap and install a repo
+
+1. Bootstrap this machine once:
 
 ```bash
 autonomous-loop bootstrap
+```
+
+2. Verify machine setup:
+
+```bash
+autonomous-loop doctor
 ```
 
 3. Install repo-local support files into a target repo:
@@ -45,17 +71,18 @@ If Codex was already running when you bootstrapped the machine, restart it once 
 
 - `$CODEX_HOME/hooks.json`
 - `$CODEX_HOME/skills/autonomous-loop/SKILL.md`
+- `$CODEX_HOME/skills/autonomous-loop/agents/openai.yaml`
 - `$CODEX_HOME/autoloop/machine.json`
 
 `install-repo` writes the repo-local assets:
 
 - `.codex/autoloop.project.json`
-- `.codex/hooks.json`
 - `.agents/skills/autonomous-loop/SKILL.md`
+- `.agents/skills/autonomous-loop/agents/openai.yaml`
 
 Pass `--force` to `bootstrap` to overwrite existing global hooks and skill files.
 
-`install-repo` fails closed until machine bootstrap is complete. The repo-local hooks it generates are derived from the verified command path saved during `bootstrap`.
+`install-repo` fails closed until machine bootstrap is complete. Repo-local hooks are intentionally **not** installed by default because the global `$CODEX_HOME/hooks.json` hook enforces the loop across profiles. Use `--install-hooks` only for an explicit repo-local opt-in.
 
 ## What The Runtime Does
 
@@ -72,9 +99,10 @@ At each real `Stop` hook, the runtime:
 
 1. resolves the active repo and session
 2. validates the saved contract and verification bundle
-3. re-evaluates deterministic task evidence from the filesystem
-4. runs the trusted commands referenced by the configured gate profile
-5. blocks, releases, or hard-stops based on those results
+3. reads the latest Codex `update_plan` state from the hook transcript, if available
+4. re-evaluates deterministic task evidence from the filesystem
+5. runs the trusted commands referenced by the configured gate profile
+6. blocks, releases, or hard-stops based on those results
 
 If the contract hash changes unexpectedly, required runtime files are unreadable, or the same blocker repeats too many times, the runtime fails closed.
 
@@ -125,6 +153,16 @@ autonomous-loop status --cwd <path> [--session-id <id>]
 
 `status` includes a repo hygiene summary and archived artifact counts so stale state is visible without reading the runtime directories directly.
 
+### `agent-instructions`
+
+```
+autonomous-loop agent-instructions --cwd <path>
+```
+
+- `--cwd` (required) — repo working directory
+
+`agent-instructions` returns a JSON checklist for fresh Codex contexts: setup health, available trusted commands, gate profiles, an enable-command template, the reminder that `update_plan` is part of Stop-hook enforcement, and an AGENTS.md snippet you can paste into repo guidance.
+
 ### `cleanup`
 
 ```
@@ -171,14 +209,17 @@ Until that stop event happens, `autonomous-loop status --cwd "$PWD"` can still s
 
 ## Install Notes
 
-For Node-style repos, `install-repo` currently:
+`install-repo` currently detects verification commands for Node, Make, Python, Rust, and Go repos.
+
+For Node-style repos, it:
 
 - requires `package.json`
 - detects the package manager with this precedence:
   - `--package-manager`
   - `package.json.packageManager`
   - lockfiles
-- trusts only these script names: `typecheck`, `lint`, `test`
+- prefers combined script names first: `check`, `quality`, `ci`
+- otherwise trusts: `typecheck`, `lint`, `test`
 - preserves existing repo-local files unless you pass `--force`
 
 Example overrides:
@@ -186,11 +227,12 @@ Example overrides:
 ```bash
 autonomous-loop install-repo --repo /path/to/repo --package-manager npm
 autonomous-loop install-repo --repo /path/to/repo --prefer-scripts lint,test
+autonomous-loop install-repo --repo /path/to/repo --install-hooks
 ```
 
 `--prefer-scripts` is a single comma-separated argument.
 
-Current `install-repo` autodetect scope is Node-style repos with `package.json`. For non-Node repos, install the repo-local support files you need and write `.codex/autoloop.project.json` manually.
+For non-Node repos, autodetect looks for standard Make targets, Python project files with concrete pytest/ruff/mypy signals, `Cargo.toml`, or `go.mod`. If no trustworthy command can be detected, write `.codex/autoloop.project.json` manually.
 
 ## Read Next
 
@@ -203,7 +245,7 @@ Current `install-repo` autodetect scope is Node-style repos with `package.json`.
 
 ## Current Assumptions
 
-This project is built around the verified Codex CLI `0.114.0` hook model:
+This project is built around the current Codex hook model:
 
 - `SessionStart` and `Stop` hooks exist
 - hooks are discovered from `hooks.json`

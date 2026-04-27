@@ -1,0 +1,3 @@
+display_name: Autonomous Loop
+short_description: Keep Codex working until plan items and gates pass.
+default_prompt: Use /autonomous-loop for this task. Create and maintain the Codex task plan, implement the work, run verification gates, and do not stop until everything is complete.

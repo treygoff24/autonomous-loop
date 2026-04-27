@@ -11,11 +11,25 @@ Run `autonomous-loop doctor` after each step. It is the fastest way to see exact
 
 ## Machine Setup
 
-Install the package:
+Install the tagged release directly from GitHub:
+
+```bash
+python3 -m pip install "git+https://github.com/treygoff24/autonomous-loop.git@v0.2.0"
+```
+
+Or install it as an isolated CLI with `pipx`:
+
+```bash
+pipx install "git+https://github.com/treygoff24/autonomous-loop.git@v0.2.0"
+```
+
+For local development from a checkout:
 
 ```bash
 python3 -m pip install .
 ```
+
+This release is tested on Codex CLI `0.125.0` and requires Codex hook support with the `codex_hooks` feature enabled.
 
 Bootstrap the current machine once:
 
@@ -33,6 +47,7 @@ That command writes:
 
 - `$CODEX_HOME/hooks.json`
 - `$CODEX_HOME/skills/autonomous-loop/SKILL.md`
+- `$CODEX_HOME/skills/autonomous-loop/agents/openai.yaml`
 - `$CODEX_HOME/autoloop/machine.json`
 
 Verify machine setup:
@@ -52,7 +67,8 @@ Expected result: `ok: true`.
 
 When invoked with `--cwd`, an additional check is included:
 
-- `repo_install` — verifies repo-local config, hooks, and skill are present, and that the repo hooks match the machine config
+- `repo_install` — verifies repo-local config and skill are present
+- `repo_hooks` — only appears when repo-local hooks exist; matching hooks are accepted, stale hooks fail with remediation
 - `runtime_hygiene` — reports stale live sessions, old paused or inactive sessions, and old pending or historical requests without failing the install
 
 If Codex was already running, restart it once after bootstrap so it reloads the global hooks and skill.
@@ -69,11 +85,13 @@ Install repo-local support files into a target project:
 autonomous-loop install-repo --repo /path/to/repo
 ```
 
-That command currently supports Node-style repos with `package.json`. It writes:
+That command supports Node, Make, Python, Rust, and Go repos. It writes:
 
 - `.codex/autoloop.project.json`
-- `.codex/hooks.json`
 - `.agents/skills/autonomous-loop/SKILL.md`
+- `.agents/skills/autonomous-loop/agents/openai.yaml`
+
+Repo-local hooks are not installed by default. The global `$CODEX_HOME/hooks.json` hook enforces the loop across all Codex profiles. Use `--install-hooks` only when a repo intentionally opts into local hook enforcement.
 
 It also uses the verified machine command saved by `bootstrap`. If machine bootstrap is missing, `install-repo` exits non-zero with `error_code: "missing_machine_bootstrap"`.
 
@@ -89,14 +107,18 @@ Expected result: `ok: true` with a passing `repo_install` check.
 
 ## Repo Detection And Verification Commands
 
-For Node-style repos, `install-repo` currently:
+For Node-style repos, `install-repo`:
 
 - requires `package.json`
 - detects the package manager with this precedence:
   - `--package-manager`
   - `package.json.packageManager`
   - lockfiles
-- trusts only these verification script names:
+- prefers combined verification scripts:
+  - `check`
+  - `quality`
+  - `ci`
+- otherwise trusts:
   - `typecheck`
   - `lint`
   - `test`
@@ -109,11 +131,12 @@ Override examples:
 autonomous-loop install-repo --repo /path/to/repo --package-manager npm
 autonomous-loop install-repo --repo /path/to/repo --prefer-scripts lint,test
 autonomous-loop install-repo --repo /path/to/repo --force
+autonomous-loop install-repo --repo /path/to/repo --install-hooks
 ```
 
 `--prefer-scripts` is a single comma-separated argument.
 
-Current autodetect scope is Node-style repos only. For non-Node repos, install the repo-local support files you need and write `.codex/autoloop.project.json` manually.
+For non-Node repos, autodetect checks standard Make targets, Python project files with concrete pytest/ruff/mypy signals, `Cargo.toml`, and `go.mod`. If no trustworthy command can be detected, write `.codex/autoloop.project.json` manually.
 
 ## CLI Reference
 
@@ -154,6 +177,16 @@ autonomous-loop status --cwd <path> [--session-id <id>]
 - `--session-id` (optional) — inspect a specific session instead of the active one
 
 `status` also reports archived artifact counts plus a hygiene summary for the repo runtime root.
+
+### `agent-instructions`
+
+```
+autonomous-loop agent-instructions --cwd <path>
+```
+
+- `--cwd` (required) — repo working directory
+
+`agent-instructions` is for fresh Codex contexts and repo guidance. It returns setup health, trusted command refs, gate profiles, an enable-command template, an explicit reminder to keep `update_plan` current, and an AGENTS.md snippet.
 
 ### `cleanup`
 

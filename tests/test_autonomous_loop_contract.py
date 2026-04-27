@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+import json
 import shutil
 import tempfile
 import unittest
@@ -161,6 +162,85 @@ class AutonomousLoopContractTests(unittest.TestCase):
             state_is_active(self.temp_dir),
             "A green stop decision should clear or deactivate the run state",
         )
+
+    def test_stop_hook_blocks_when_latest_codex_plan_is_incomplete(self) -> None:
+        runtime = AutonomousLoopRuntime(root=self.temp_dir / ".autoloop")
+        (self.temp_dir / "done.txt").write_text("done\n", encoding="utf-8")
+        with patch.dict(os.environ, {"CODEX_THREAD_ID": "plan-session"}, clear=False):
+            runtime.request_enable(
+                cwd=self.temp_dir,
+                objective="Finish the plan",
+                task_json=[
+                    {
+                        "id": "T1",
+                        "title": "Create done marker",
+                        "required": True,
+                        "evidence": [{"kind": "pathExists", "path": "done.txt"}],
+                    }
+                ],
+            )
+        transcript = self._write_plan_transcript([{"step": "Run final gates", "status": "pending"}])
+
+        result = runtime.handle_stop_payload(
+            {
+                "cwd": str(self.temp_dir),
+                "session_id": "plan-session",
+                "transcript_path": str(transcript),
+                "last_assistant_message": None,
+            }
+        )
+
+        self.assertIsNotNone(result)
+        assert result is not None
+        self.assertEqual(result["decision"], "block")
+        self.assertIn("Plan incomplete", result["reason"])
+
+    def test_stop_hook_releases_when_latest_codex_plan_and_gates_are_complete(self) -> None:
+        runtime = AutonomousLoopRuntime(root=self.temp_dir / ".autoloop")
+        (self.temp_dir / "done.txt").write_text("done\n", encoding="utf-8")
+        with patch.dict(os.environ, {"CODEX_THREAD_ID": "plan-session"}, clear=False):
+            runtime.request_enable(
+                cwd=self.temp_dir,
+                objective="Finish the plan",
+                task_json=[
+                    {
+                        "id": "T1",
+                        "title": "Create done marker",
+                        "required": True,
+                        "evidence": [{"kind": "pathExists", "path": "done.txt"}],
+                    }
+                ],
+            )
+        transcript = self._write_plan_transcript([{"step": "Run final gates", "status": "completed"}])
+
+        result = runtime.handle_stop_payload(
+            {
+                "cwd": str(self.temp_dir),
+                "session_id": "plan-session",
+                "transcript_path": str(transcript),
+                "last_assistant_message": None,
+            }
+        )
+
+        self.assertIsNone(result)
+
+    def _write_plan_transcript(self, plan: list[dict[str, str]]) -> Path:
+        transcript = self.temp_dir / "transcript.jsonl"
+        transcript.write_text(
+            json.dumps(
+                {
+                    "type": "response_item",
+                    "payload": {
+                        "type": "function_call",
+                        "name": "update_plan",
+                        "arguments": json.dumps({"plan": plan}),
+                    },
+                }
+            )
+            + "\n",
+            encoding="utf-8",
+        )
+        return transcript
 
     def test_contract_hash_mismatch_fails_closed(self) -> None:
         artifacts = self.enable_run()

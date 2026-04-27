@@ -18,6 +18,7 @@ from .logging_utils import build_file_logger
 from .models import Namespace, PendingRequest, RuntimeState, utc_now
 from .paths import RuntimePaths, hash_text, repo_hash_for
 from .storage import RuntimeStore, atomic_write_json, read_json
+from .transcript import PlanSnapshot, describe_incomplete_plan, load_latest_plan_snapshot
 
 DEFAULT_STALE_HOURS = 8
 DEFAULT_RETENTION_HOURS = 24
@@ -32,6 +33,21 @@ def _check_hooks_match(hooks_json: Any, machine_config: dict[str, Any]) -> tuple
     if stop_command != machine_config["hook_commands"]["stop"]:
         return False, "stop command does not match machine config"
     return True, None
+
+
+def _repo_hooks_contain_autonomous_loop(hooks_json: Any) -> bool:
+    if not isinstance(hooks_json, dict):
+        return False
+    for matcher_groups in hooks_json.get("hooks", {}).values():
+        if not isinstance(matcher_groups, list):
+            continue
+        for matcher_group in matcher_groups:
+            if not isinstance(matcher_group, dict):
+                continue
+            for hook in matcher_group.get("hooks", []):
+                if isinstance(hook, dict) and "autonomous-loop hook" in str(hook.get("command", "")):
+                    return True
+    return False
 
 
 def _paths_equivalent(left: str | Path, right: str | Path) -> bool:
@@ -238,6 +254,26 @@ def _evaluate_evidence(
         details.append(f"{kind}=unsupported")
         return False, details
     return True, details
+
+
+def _plan_task_details(snapshot: PlanSnapshot | None) -> list[str]:
+    if snapshot is None or snapshot.is_complete:
+        return []
+    return [f"plan:{index} ({item.status}): {item.step}" for index, item in enumerate(snapshot.incomplete_items, start=1)]
+
+
+def _agents_md_snippet() -> str:
+    return "\n".join(
+        [
+            "When the user says `/autonomous-loop`, `use autonomous-loop`, or asks you to work until done:",
+            "- Load the autonomous-loop skill.",
+            "- Run `autonomous-loop doctor --cwd \"$PWD\"` before activation.",
+            "- Call `update_plan` with the real task list before implementation.",
+            "- Keep the Codex plan truthful; Stop hooks block while any plan item is not `completed`.",
+            "- Run trusted gates from `.codex/autoloop.project.json` and do not invent verification commands.",
+            "- Do not finish until every plan item is completed and verification gates pass.",
+        ]
+    )
 
 
 class AutonomousLoopRuntime:
@@ -873,7 +909,9 @@ class AutonomousLoopRuntime:
                 self.store.save_state(namespace, state)
                 self._clear_active_session(namespace.repo_hash, namespace.session_id)
                 return stop_hard_stop("autonomous-loop failed closed: contract hash mismatch")
-            outstanding: list[str] = []
+            plan_snapshot = load_latest_plan_snapshot(payload.get("transcript_path"))
+            plan_details = _plan_task_details(plan_snapshot)
+            outstanding: list[str] = [f"plan:{index}" for index, _ in enumerate(plan_details, start=1)]
             task_details: list[str] = []
             for task in contract.get("tasks", []):
                 if not task.get("required", True):
@@ -882,6 +920,7 @@ class AutonomousLoopRuntime:
                 if not complete:
                     outstanding.append(task["id"])
                     task_details.append(f"{task['id']} ({task['title']}): " + "; ".join(details))
+            task_details = plan_details + task_details
             state.outstanding_task_ids = outstanding
             project_config = self.store.load_project_config(repo_root)
             if outstanding:
@@ -889,6 +928,8 @@ class AutonomousLoopRuntime:
                 gate_run = run_gate_profile(fast_profile, project_config, repo_root)
                 state.last_gate_failures = list(gate_run["failures"])
                 reason = f"Outstanding tasks: {', '.join(task_details)}"
+                if plan_snapshot is not None and not plan_snapshot.is_complete:
+                    reason = f"{describe_incomplete_plan(plan_snapshot)}. {reason}"
                 if gate_run["failures"]:
                     reason += f". Fast gates failing: {', '.join(gate_run['failures'])}"
                 signature = stable_hash({"tasks": outstanding, "gates": gate_run["failures"]})
@@ -1090,12 +1131,6 @@ class AutonomousLoopRuntime:
                     "reason": f"missing .codex/autoloop.project.json at {config_path}",
                     "repo_root": str(repo_root),
                 }
-            elif not hooks_repo_path.is_file():
-                checks["repo_install"] = {
-                    "ok": False,
-                    "reason": f"missing .codex/hooks.json at {hooks_repo_path}",
-                    "repo_root": str(repo_root),
-                }
             elif not skill_repo_path.is_file():
                 checks["repo_install"] = {
                     "ok": False,
@@ -1103,20 +1138,32 @@ class AutonomousLoopRuntime:
                     "repo_root": str(repo_root),
                 }
             else:
-                hooks_json = read_json(hooks_repo_path, None)
-                if machine_ok and machine is not None:
-                    hooks_ok, hooks_reason = _check_hooks_match(hooks_json, machine)
-                    if not hooks_ok:
-                        checks["repo_install"] = {
-                            "ok": False,
-                            "reason": f"repo hooks {hooks_reason}",
-                            "repo_root": str(repo_root),
-                            "remediation": f"Rerun `autonomous-loop install-repo --repo {repo_root} --force` to update hooks.",
-                        }
+                checks["repo_install"] = {"ok": True, "repo_root": str(repo_root)}
+                if hooks_repo_path.is_file():
+                    hooks_json = read_json(hooks_repo_path, None)
+                    if _repo_hooks_contain_autonomous_loop(hooks_json):
+                        hooks_ok, hooks_reason = _check_hooks_match(hooks_json, machine) if machine_ok and machine else (True, None)
+                        if hooks_ok:
+                            checks["repo_hooks"] = {
+                                "ok": True,
+                                "repo_root": str(repo_root),
+                                "path": str(hooks_repo_path),
+                                "warning": "repo-local autonomous-loop hooks are present; global hooks are the default enforcement path",
+                            }
+                        else:
+                            checks["repo_hooks"] = {
+                                "ok": False,
+                                "reason": f"repo hooks {hooks_reason}",
+                                "repo_root": str(repo_root),
+                                "path": str(hooks_repo_path),
+                                "remediation": (
+                                    f"Remove {hooks_repo_path}, or rerun "
+                                    f"`autonomous-loop install-repo --repo {repo_root} --force --install-hooks` "
+                                    "if this repo intentionally opts into local hook enforcement."
+                                ),
+                            }
                     else:
-                        checks["repo_install"] = {"ok": True, "repo_root": str(repo_root)}
-                else:
-                    checks["repo_install"] = {"ok": True, "repo_root": str(repo_root)}
+                        checks["repo_hooks"] = {"ok": True, "repo_root": str(repo_root), "path": str(hooks_repo_path)}
             checks["runtime_hygiene"] = {
                 "ok": True,
                 **self._inspect_runtime_hygiene(
@@ -1229,12 +1276,51 @@ class AutonomousLoopRuntime:
             ),
         }
 
+    def agent_instructions(self, cwd: str | Path) -> dict[str, Any]:
+        repo_root = self.paths.resolve_repo_root(cwd)
+        doctor = self.doctor(cwd=repo_root)
+        project_config = self.store.load_project_config(repo_root)
+        commands = project_config.get("commands", {}) if isinstance(project_config, dict) else {}
+        gate_profiles = project_config.get("gateProfiles", {}) if isinstance(project_config, dict) else {}
+        defaults = project_config.get("defaults", {}) if isinstance(project_config, dict) else {}
+        instructions = [
+            "Run autonomous-loop doctor --cwd \"$PWD\" and stop if it fails.",
+            "Read .codex/autoloop.project.json; use only trusted commands from that file.",
+            "Call update_plan with the real implementation task list before editing.",
+            "Keep exactly one plan item in_progress while work remains.",
+            "Mark plan items completed only after the work and relevant gates are done.",
+            "Enable autonomous-loop with a minimal contract, then immediately implement the task.",
+            "If gates fail or new required work appears, update_plan truthfully and continue.",
+            "Do not produce a final answer until every plan item is completed and gates pass.",
+        ]
+        return {
+            "ok": bool(doctor.get("ok")),
+            "repo_root": str(repo_root),
+            "doctor": doctor,
+            "commands_available": sorted(commands) if isinstance(commands, dict) else [],
+            "gate_profiles_available": sorted(gate_profiles) if isinstance(gate_profiles, dict) else [],
+            "default_gate_profile": defaults.get("gateProfile") if isinstance(defaults, dict) else None,
+            "enable_command_template": (
+                'autonomous-loop request enable --cwd "$PWD" '
+                '--objective "<one-line summary of the user task>" '
+                '--task-json \'{"id":"T1","title":"<task title>","required":true,'
+                '"evidence":[{"kind":"pathChanged","glob":"src/**"}]}\''
+            ),
+            "instructions": instructions,
+            "agents_md_snippet": _agents_md_snippet(),
+            "plan_contract_reminder": (
+                "The Stop hook reads transcript update_plan calls and blocks exit while any latest plan item "
+                "is not completed."
+            ),
+        }
+
     def install_repo(
         self,
         repo_root: str | Path,
         force: bool = False,
         package_manager: str | None = None,
         prefer_scripts: list[str] | None = None,
+        install_hooks: bool = False,
     ) -> dict[str, Any]:
         repo = self.paths.resolve_repo_root(repo_root)
         machine = self.store.load_machine_config()
@@ -1279,15 +1365,19 @@ class AutonomousLoopRuntime:
             )
         else:
             copied.append(config_path)
-        hooks_path = self.store.write_repo_hooks(repo, machine["hook_commands"], force=force)
-        if hooks_path is not None:
-            copied.append(hooks_path)
+        if install_hooks:
+            hooks_path = self.store.write_repo_hooks(repo, machine["hook_commands"], force=force)
+            if hooks_path is not None:
+                copied.append(hooks_path)
+        else:
+            warnings.append("Repo-local hooks were not installed; global Codex hooks enforce autonomous-loop.")
         skill_path = self.store.install_repo_skill_template(self.template_root, repo, force=force)
         if skill_path is not None:
             copied.append(skill_path)
         return {
             "ok": True,
             "repo_root": str(repo),
+            "project_type_detected": prepared["project_type_detected"],
             "package_manager_detected": prepared["package_manager_detected"],
             "scripts_detected": prepared["scripts_detected"],
             "commands_generated": prepared["commands_generated"],

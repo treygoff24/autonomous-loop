@@ -50,6 +50,7 @@ class BootstrapTests(unittest.TestCase):
         self.assertTrue(payload["ok"])
         self.assertTrue((self.codex_home / "hooks.json").is_file())
         self.assertTrue((self.codex_home / "skills" / "autonomous-loop" / "SKILL.md").is_file())
+        self.assertTrue((self.codex_home / "skills" / "autonomous-loop" / "agents" / "openai.yaml").is_file())
         machine = load_json(self.runtime_root / "machine.json")
         self.assertIsNotNone(machine)
         assert machine is not None
@@ -81,8 +82,9 @@ class BootstrapTests(unittest.TestCase):
         assert hooks is not None
         self.assertIn("hooks", hooks)
         self.assertNotIn("custom", hooks)
+        self.assertEqual(hooks["hooks"]["Stop"][0]["hooks"][0]["timeout"], 600)
 
-    def test_install_repo_renders_hooks_from_bootstrap_machine_config(self) -> None:
+    def test_install_repo_does_not_render_repo_hooks_by_default(self) -> None:
         bootstrap = run_cli(["bootstrap"], env=self.env)
         self.assertEqual(bootstrap.returncode, 0)
 
@@ -96,8 +98,25 @@ class BootstrapTests(unittest.TestCase):
         completed = run_cli(["install-repo", "--repo", str(repo)], env=self.env)
 
         self.assertEqual(completed.returncode, 0)
+        self.assertFalse((repo / ".codex" / "hooks.json").exists())
+
+    def test_install_repo_can_render_hooks_when_explicitly_requested(self) -> None:
+        bootstrap = run_cli(["bootstrap"], env=self.env)
+        self.assertEqual(bootstrap.returncode, 0)
+
+        repo = make_node_repo(
+            self.temp_dir / "repo-with-hooks",
+            package_manager="npm@10.9.0",
+            scripts={"lint": "eslint .", "test": "vitest run"},
+            lockfiles=("package-lock.json",),
+        )
+
+        completed = run_cli(["install-repo", "--repo", str(repo), "--install-hooks"], env=self.env)
+
+        self.assertEqual(completed.returncode, 0)
         hooks = load_json(repo / ".codex" / "hooks.json")
         self.assertIsNotNone(hooks)
         assert hooks is not None
         command = hooks["hooks"]["Stop"][0]["hooks"][0]["command"]
         self.assertIn(str(self.fake_cli_path), command)
+        self.assertEqual(hooks["hooks"]["Stop"][0]["hooks"][0]["timeout"], 600)

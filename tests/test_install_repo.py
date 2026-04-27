@@ -152,7 +152,7 @@ class InstallRepoTests(unittest.TestCase):
         config = load_installed_project_config(repo)
 
         self.assertTrue(result["ok"])
-        self.assertEqual(result["warnings"], ["Only one verification script was detected; all gate profiles use the same command."])
+        self.assertIn("Only one verification command was detected; all gate profiles use the same command.", result["warnings"])
         self.assertEqual(config["gateProfiles"]["fast"], ["lint"])
         self.assertEqual(config["gateProfiles"]["default"], ["lint"])
         self.assertEqual(config["gateProfiles"]["final"], ["lint"])
@@ -195,10 +195,11 @@ class InstallRepoTests(unittest.TestCase):
         self.assertEqual(load_json(existing), {"version": "0.1", "commands": {"custom": ["echo", "keep-me"]}})
         self.assertNotIn(str(existing), result["copied"])
         self.assertIn("Existing .codex/autoloop.project.json was preserved; rerun with --force to overwrite it.", result["warnings"])
-        self.assertTrue((repo / ".codex" / "hooks.json").is_file())
+        self.assertFalse((repo / ".codex" / "hooks.json").exists())
         self.assertTrue((repo / ".agents" / "skills" / "autonomous-loop" / "SKILL.md").is_file())
+        self.assertTrue((repo / ".agents" / "skills" / "autonomous-loop" / "agents" / "openai.yaml").is_file())
 
-    def test_install_repo_preserves_and_forces_repo_support_files_per_artifact(self) -> None:
+    def test_install_repo_preserves_existing_hooks_unless_explicitly_requested(self) -> None:
         repo = self.make_repo(
             "support-files",
             package_manager="npm@10.9.0",
@@ -218,7 +219,7 @@ class InstallRepoTests(unittest.TestCase):
         self.assertEqual(hooks_path.read_text(encoding="utf-8"), "{\"custom\": true}\n")
         self.assertEqual(skill_path.read_text(encoding="utf-8"), "custom skill\n")
 
-        result_with_force = self.runtime.call("install_repo", repo_root=repo, force=True)
+        result_with_force = self.runtime.call("install_repo", repo_root=repo, force=True, install_hooks=True)
 
         self.assertTrue(result_with_force["ok"])
         rendered_hooks = load_json(hooks_path)
@@ -240,6 +241,87 @@ class InstallRepoTests(unittest.TestCase):
                 / "SKILL.md"
             ).read_text(encoding="utf-8"),
         )
+        self.assertTrue((skill_path.parent / "agents" / "openai.yaml").is_file())
+
+    def test_agent_instructions_report_plan_and_gate_contract(self) -> None:
+        repo = self.make_repo(
+            "agent-instructions",
+            package_manager="npm@10.9.0",
+            scripts={"check": "npm run lint && npm test", "lint": "eslint .", "test": "vitest run"},
+            lockfiles=("package-lock.json",),
+        )
+        install = run_install_repo_cli(repo, env=self._cli_env)
+        self.assertEqual(install.returncode, 0)
+
+        completed = run_cli(["agent-instructions", "--cwd", str(repo)], env=self._cli_env)
+        payload = json.loads(completed.stdout)
+
+        self.assertEqual(completed.returncode, 0)
+        self.assertTrue(payload["ok"])
+        self.assertEqual(payload["commands_available"], ["check"])
+        self.assertIn("update_plan", " ".join(payload["instructions"]))
+        self.assertIn("Stop hook reads transcript update_plan calls", payload["plan_contract_reminder"])
+        self.assertIn("Call `update_plan`", payload["agents_md_snippet"])
+
+    def test_install_repo_prefers_combined_check_script(self) -> None:
+        repo = self.make_repo(
+            "combined-check",
+            package_manager="pnpm@10.0.0",
+            scripts={"check": "pnpm lint && pnpm test", "lint": "eslint .", "test": "vitest run"},
+            lockfiles=("pnpm-lock.yaml",),
+        )
+
+        result = self.runtime.call("install_repo", repo_root=repo)
+        config = load_installed_project_config(repo)
+
+        self.assertTrue(result["ok"])
+        self.assertEqual(result["scripts_detected"], ["check"])
+        self.assertEqual(config["commands"], {"check": ["pnpm", "check"]})
+        self.assertEqual(config["gateProfiles"]["final"], ["check"])
+
+    def test_install_repo_detects_python_repo(self) -> None:
+        repo = self.temp_dir / "python-app"
+        repo.mkdir(parents=True)
+        (repo / "pyproject.toml").write_text("[tool.pytest.ini_options]\n[tool.ruff]\n", encoding="utf-8")
+        (repo / "tests").mkdir()
+
+        result = self.runtime.call("install_repo", repo_root=repo)
+        config = load_installed_project_config(repo)
+
+        self.assertTrue(result["ok"])
+        self.assertEqual(result["project_type_detected"], "python")
+        self.assertEqual(config["commands"]["test"], ["python3", "-m", "pytest", "-q"])
+        self.assertEqual(config["commands"]["lint"], ["ruff", "check", "."])
+
+    def test_install_repo_rejects_python_repo_without_verification_signal(self) -> None:
+        repo = self.temp_dir / "python-no-gates"
+        repo.mkdir(parents=True)
+        (repo / "pyproject.toml").write_text("[project]\nname = \"fixture\"\n", encoding="utf-8")
+
+        completed = run_install_repo_cli(repo, env=self._cli_env)
+        payload = json.loads(completed.stdout)
+
+        self.assertEqual(completed.returncode, 1)
+        self.assertFalse(payload["ok"])
+        self.assertEqual(payload["error_code"], "missing_verification_commands")
+        self.assertIn("pyproject.toml", payload["evidence"]["project_files_found"])
+        self.assertFalse((repo / ".codex" / "autoloop.project.json").exists())
+
+    def test_install_repo_detects_rust_and_go_repos(self) -> None:
+        rust_repo = self.temp_dir / "rust-app"
+        rust_repo.mkdir(parents=True)
+        (rust_repo / "Cargo.toml").write_text("[package]\nname = \"fixture\"\nversion = \"0.0.0\"\n", encoding="utf-8")
+        go_repo = self.temp_dir / "go-app"
+        go_repo.mkdir(parents=True)
+        (go_repo / "go.mod").write_text("module example.com/fixture\n", encoding="utf-8")
+
+        rust_result = self.runtime.call("install_repo", repo_root=rust_repo)
+        go_result = self.runtime.call("install_repo", repo_root=go_repo)
+
+        self.assertTrue(rust_result["ok"])
+        self.assertEqual(rust_result["commands_generated"]["fmt"], ["cargo", "fmt", "--check"])
+        self.assertTrue(go_result["ok"])
+        self.assertEqual(go_result["commands_generated"], {"test": ["go", "test", "./..."]})
 
     def test_detect_package_manager_prefers_cli_override(self) -> None:
         package_json = {"packageManager": "pnpm@10.0.0"}
@@ -270,6 +352,22 @@ class InstallRepoTests(unittest.TestCase):
         self.assertEqual(completed.returncode, 1)
         self.assertEqual(payload["error_code"], "missing_preferred_script")
         self.assertEqual(payload["evidence"]["preferred_scripts"], ["lint", "test"])
+
+    def test_prefer_scripts_rejects_non_verification_script(self) -> None:
+        repo = self.make_repo(
+            "prefer-dev",
+            package_manager="npm@10.9.0",
+            scripts={"dev": "vite", "lint": "eslint ."},
+            lockfiles=("package-lock.json",),
+        )
+
+        completed = run_install_repo_cli(repo, prefer_scripts=["dev"])
+        payload = json.loads(completed.stdout)
+
+        self.assertEqual(completed.returncode, 1)
+        self.assertEqual(payload["error_code"], "invalid_preferred_script")
+        self.assertEqual(payload["evidence"]["preferred_scripts"], ["dev"])
+        self.assertIn("check", payload["evidence"]["supported_scripts"])
 
     def test_yarn_and_bun_command_generation_smoke(self) -> None:
         cases = {

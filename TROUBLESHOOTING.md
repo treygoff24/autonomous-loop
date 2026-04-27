@@ -83,9 +83,8 @@ autonomous-loop doctor --cwd /path/to/repo
 Then match the failure reason:
 
 - missing `.codex/autoloop.project.json`: rerun `autonomous-loop install-repo --repo /path/to/repo`
-- missing `.codex/hooks.json`: rerun `autonomous-loop install-repo --repo /path/to/repo --force`
 - missing repo-local skill (expected at `.agents/skills/autonomous-loop/SKILL.md`): rerun `autonomous-loop install-repo --repo /path/to/repo --force`
-- repo hooks stop command does not match machine config: rerun `autonomous-loop bootstrap --force`, then `autonomous-loop install-repo --repo /path/to/repo --force`
+- repo hooks stop command does not match machine config: remove `.codex/hooks.json`, or rerun `autonomous-loop bootstrap --force` and then `autonomous-loop install-repo --repo /path/to/repo --force --install-hooks` if the repo intentionally opts into local hooks
 
 Re-run:
 
@@ -98,11 +97,12 @@ autonomous-loop doctor --cwd /path/to/repo
 `install-repo` returns machine-readable JSON. Common failures:
 
 - `missing_machine_bootstrap`: run `autonomous-loop bootstrap`, then rerun `install-repo`
-- `missing_package_json`: target repo is not a supported Node-style repo root
+- `missing_verification_commands`: target repo has no detected Node/Make/Python/Rust/Go verification command
 - `ambiguous_package_manager`: remove conflicting lockfiles or pass `--package-manager <npm|pnpm|yarn|bun>`
 - `missing_package_manager`: add `packageManager` to `package.json` or pass `--package-manager`
-- `missing_verification_scripts`: define at least one of `typecheck`, `lint`, or `test`
-- `invalid_preferred_script` or `missing_preferred_script`: fix the `--prefer-scripts` list
+- `missing_verification_scripts`: define at least one of `check`, `quality`, `ci`, `typecheck`, `lint`, or `test`
+- `missing_preferred_script`: fix the `--prefer-scripts` list
+- `invalid_preferred_script`: `--prefer-scripts` named a script that is not a supported verification script; use `check`, `quality`, `ci`, `typecheck`, `lint`, or `test`
 - `invalid_package_manager_override`: `--package-manager` was passed with an unsupported value; use one of `npm|pnpm|yarn|bun`
 - `unsupported_package_manager`: `package.json` has a `packageManager` field with an unrecognized value; fix the field or pass `--package-manager` to override
 

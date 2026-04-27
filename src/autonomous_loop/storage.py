@@ -170,6 +170,7 @@ class RuntimeStore:
             return None
         dest.parent.mkdir(parents=True, exist_ok=True)
         shutil.copy2(source, dest)
+        self._copy_skill_metadata(source.parent, dest.parent, force=force)
         return str(dest)
 
     def install_repo_skill_template(self, template_root: Path, repo_root: Path, force: bool = False) -> str | None:
@@ -179,4 +180,15 @@ class RuntimeStore:
             return None
         dest.parent.mkdir(parents=True, exist_ok=True)
         shutil.copy2(source, dest)
+        self._copy_skill_metadata(source.parent, dest.parent, force=force)
         return str(dest)
+
+    def _copy_skill_metadata(self, source_skill_dir: Path, dest_skill_dir: Path, *, force: bool) -> None:
+        source = source_skill_dir / "agents" / "openai.yaml"
+        if not source.is_file():
+            return
+        dest = dest_skill_dir / "agents" / "openai.yaml"
+        if dest.exists() and not force:
+            return
+        dest.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(source, dest)
